@@ -22,6 +22,7 @@ pub struct Config {
     notify_url: Option<Url>,
     return_url: Option<Url>,
     allow_insecure_http: bool,
+    allow_insecure_callback_http: bool,
 }
 
 impl fmt::Debug for Config {
@@ -34,6 +35,10 @@ impl fmt::Debug for Config {
             .field("notify_url", &self.notify_url.as_ref().map(redacted_url))
             .field("return_url", &self.return_url.as_ref().map(redacted_url))
             .field("allow_insecure_http", &self.allow_insecure_http)
+            .field(
+                "allow_insecure_callback_http",
+                &self.allow_insecure_callback_http,
+            )
             .finish()
     }
 }
@@ -48,6 +53,7 @@ pub(crate) struct ConfigParts {
     pub notify_url: Option<String>,
     pub return_url: Option<String>,
     pub allow_insecure_http: bool,
+    pub allow_insecure_callback_http: bool,
 }
 
 impl ConfigParts {
@@ -60,6 +66,7 @@ impl ConfigParts {
             notify_url: None,
             return_url: None,
             allow_insecure_http: false,
+            allow_insecure_callback_http: false,
         }
     }
 }
@@ -74,6 +81,10 @@ impl fmt::Debug for ConfigParts {
             .field("notify_url_set", &self.notify_url.is_some())
             .field("return_url_set", &self.return_url.is_some())
             .field("allow_insecure_http", &self.allow_insecure_http)
+            .field(
+                "allow_insecure_callback_http",
+                &self.allow_insecure_callback_http,
+            )
             .finish()
     }
 }
@@ -103,15 +114,24 @@ impl Config {
         };
         api_base_url.set_path(&normalized_path);
 
+        let allow_callback_http = parts.allow_insecure_callback_http;
         let notify_url = parts
             .notify_url
             .as_deref()
-            .map(|url| parse_callback_url(url, Error::INVALID_NOTIFY_URL))
+            .map(|url| {
+                let url = parse_callback_url(url, Error::INVALID_NOTIFY_URL)?;
+                require_https_callback(&url, allow_callback_http, Error::INSECURE_NOTIFY_URL)?;
+                Ok::<_, Error>(url)
+            })
             .transpose()?;
         let return_url = parts
             .return_url
             .as_deref()
-            .map(|url| parse_callback_url(url, Error::INVALID_RETURN_URL))
+            .map(|url| {
+                let url = parse_callback_url(url, Error::INVALID_RETURN_URL)?;
+                require_https_callback(&url, allow_callback_http, Error::INSECURE_RETURN_URL)?;
+                Ok::<_, Error>(url)
+            })
             .transpose()?;
 
         Ok(Self {
@@ -122,6 +142,7 @@ impl Config {
             notify_url,
             return_url,
             allow_insecure_http: parts.allow_insecure_http,
+            allow_insecure_callback_http: allow_callback_http,
         })
     }
 
@@ -153,6 +174,12 @@ impl Config {
     /// Whether a plain-HTTP gateway was explicitly allowed.
     pub fn allow_insecure_http(&self) -> bool {
         self.allow_insecure_http
+    }
+
+    /// Whether plain-HTTP `notify_url` / `return_url` values were explicitly
+    /// allowed (local testing only).
+    pub fn allow_insecure_callback_http(&self) -> bool {
+        self.allow_insecure_callback_http
     }
 
     pub(crate) fn key(&self) -> &str {
@@ -311,6 +338,17 @@ impl Default for HttpConfig {
     }
 }
 
+/// Reject plain-HTTP callbacks unless explicitly allowed. Callbacks carry
+/// the signed payment result; over HTTP an on-path attacker can read and
+/// replay it.
+pub(crate) fn require_https_callback(url: &Url, allow_http: bool, error: Error) -> Result<()> {
+    if url.scheme() == "https" || allow_http {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
 pub(crate) fn parse_callback_url(raw: &str, error: Error) -> Result<Url> {
     let raw = raw.trim();
     let Ok(url) = Url::parse(raw) else {
@@ -444,7 +482,13 @@ mod tests {
     fn callback_urls_are_validated_and_debug_redacted() {
         let mut parts = ConfigParts::new(1001, "super-secret", "https://pay.example.com");
         parts.notify_url = Some("http://localhost:8080/notify?token=secret".into());
+        assert!(matches!(
+            Config::from_parts(parts.clone()),
+            Err(Error::Param(m)) if m.starts_with("notify_url must use HTTPS")
+        ));
+        parts.allow_insecure_callback_http = true;
         let c = Config::from_parts(parts.clone()).unwrap();
+        assert!(c.allow_insecure_callback_http());
         let text = format!("{c:?}");
         assert!(!text.contains("super-secret"));
         assert!(!text.contains("token=secret"));

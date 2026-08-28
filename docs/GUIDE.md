@@ -201,18 +201,20 @@ let merchant = client.query_merchant()?;
 
 `debug(true)` 时输出脱敏后的请求 / 响应。未开启 `tracing` feature 时走 `log`；开启后**只**走 `tracing`（不会同时发 `log`，因此安装了 `LogTracer` 的应用不会看到重复事件），每次网关调用都在 `epay.request` span（字段 `endpoint`、`method`）内执行，重试和回调拒绝以 `warn` 事件记录。
 
-## 旧 HTTP 网关
+## 旧 HTTP 网关与本地回调
 
-不安全 HTTP 不会被静默接受：
+网关地址和回调地址默认都必须是 HTTPS，不安全 HTTP 不会被静默接受，两者各自有独立开关：
 
 ```rust,no_run
 let client = epay_sdk::Client::builder(1001, "key", "http://legacy.example.com")
-    .allow_insecure_http(true)
+    .allow_insecure_http(true)                    // 网关是旧的 http:// 部署
+    .notify_url("http://localhost:8080/notify")
+    .allow_insecure_callback_http(true)           // 本地联调的 http:// 回调
     .build()?;
 # Ok::<(), epay_sdk::Error>(())
 ```
 
-生产环境应始终使用 HTTPS。
+回调策略同时约束配置默认值和请求级覆盖：未开启时，`FormPaymentRequest::notify_url("http://…")` 会在发送时被拒绝。回调携带签名后的支付结果，而协议没有防重放，明文传输意味着中间人可以读取并重放。生产环境应始终使用 HTTPS。
 
 ## 其它 Web 框架
 
@@ -249,13 +251,14 @@ EPAY_API_URL=https://pay.example.com
 EPAY_NOTIFY_URL=https://shop.example.com/notify
 EPAY_RETURN_URL=https://shop.example.com/return
 EPAY_DEBUG=false
-EPAY_ALLOW_INSECURE_HTTP=false
+EPAY_ALLOW_INSECURE_HTTP=false           # 允许 http:// 网关（旧部署）
+EPAY_ALLOW_INSECURE_CALLBACK_HTTP=false  # 允许 http:// 回调地址（本地联调）
 EPAY_TIMEOUT_SECS=30             # 仅 Client
 EPAY_MAX_RESPONSE_BYTES=1048576  # 仅 Client
 EPAY_MAX_RETRIES=0               # 仅 Client，GET 端点重试次数
 ```
 
-`ProtocolContext::from_env` 读取前七项，`Client::from_env` 额外读取三项 HTTP 设置。非法数字或布尔值会在启动时失败，不会静默回退。
+`ProtocolContext::from_env` 读取前八项，`Client::from_env` 额外读取三项 HTTP 设置。非法数字或布尔值会在启动时失败，不会静默回退。
 
 ## 自定义 HTTP
 

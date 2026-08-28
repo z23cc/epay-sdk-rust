@@ -12,6 +12,7 @@ use crate::types::{PayType, TradeStatus};
 ///
 /// Defaults: `trade_no = "20260828000000000001"`, `type = alipay`,
 /// `name = "Test Product"`, `trade_status = TRADE_SUCCESS`, no `param`.
+/// `Debug` masks the key.
 ///
 /// ```rust
 /// use epay_sdk::test_util::NotifyFixture;
@@ -26,7 +27,7 @@ use crate::types::{PayType, TradeStatus};
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NotifyFixture {
     pid: u64,
     key: String,
@@ -37,6 +38,22 @@ pub struct NotifyFixture {
     money: Money,
     trade_status: TradeStatus,
     param: Option<String>,
+}
+
+impl std::fmt::Debug for NotifyFixture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifyFixture")
+            .field("pid", &self.pid)
+            .field("key", &"***")
+            .field("trade_no", &self.trade_no)
+            .field("out_trade_no", &self.out_trade_no)
+            .field("pay_type", &self.pay_type)
+            .field("name", &self.name)
+            .field("money", &self.money)
+            .field("trade_status", &self.trade_status)
+            .field("param", &self.param)
+            .finish()
+    }
 }
 
 impl NotifyFixture {
@@ -134,6 +151,13 @@ mod tests {
             "ORDER001",
             Money::from_yuan_str("9.90").unwrap(),
         )
+    }
+
+    #[test]
+    fn fixture_debug_masks_key() {
+        let text = format!("{:?}", fixture());
+        assert!(!text.contains("testkey123"), "{text}");
+        assert!(text.contains("ORDER001"), "{text}");
     }
 
     #[test]

@@ -13,8 +13,8 @@ use crate::money::Money;
 use crate::serde_util::default_on_null;
 use crate::types::{Device, PayType};
 use crate::validation::{
-    validate_device, validate_name, validate_notify_url, validate_out_trade_no, validate_pay_type,
-    validate_return_url,
+    enforce_notify_url_policy, enforce_return_url_policy, validate_device, validate_name,
+    validate_notify_url, validate_out_trade_no, validate_pay_type, validate_return_url,
 };
 
 /// Request-level URL if it is non-blank, else the client default if non-blank;
@@ -34,18 +34,20 @@ pub(crate) struct ResolvedCallbacks<'a> {
 }
 
 /// Merge request-level callbacks with the configured defaults and validate
-/// the result. `notify_url` must be available from one of the two sources.
+/// the result, including the HTTPS policy. `notify_url` must be available
+/// from one of the two sources.
 pub(crate) fn resolve_callbacks<'a>(
     notify_url: Option<&'a str>,
     return_url: Option<&'a str>,
     config: &'a Config,
 ) -> Result<ResolvedCallbacks<'a>> {
+    let allow_http = config.allow_insecure_callback_http();
     let notify_url = first_non_blank(notify_url, config.notify_url().map(url::Url::as_str))
         .ok_or(Error::MISSING_NOTIFY_URL)?;
-    validate_notify_url(notify_url)?;
+    enforce_notify_url_policy(notify_url, allow_http)?;
     let return_url = first_non_blank(return_url, config.return_url().map(url::Url::as_str));
     if let Some(return_url) = return_url {
-        validate_return_url(return_url)?;
+        enforce_return_url_policy(return_url, allow_http)?;
     }
     Ok(ResolvedCallbacks {
         notify_url,
@@ -153,8 +155,9 @@ impl PaymentRequest {
 
     /// Validate every field that does not depend on client configuration.
     ///
-    /// Whether a `notify_url` is available is checked when the request is
-    /// sent, because the client may supply a default.
+    /// Whether a `notify_url` is available, and whether callbacks may use
+    /// plain HTTP, is checked when the request is sent against the client's
+    /// configuration.
     pub fn validate(&self) -> Result<()> {
         validate_out_trade_no(&self.out_trade_no)?;
         validate_pay_type(&self.pay_type)?;
@@ -424,6 +427,24 @@ mod tests {
         assert_eq!(first_non_blank(Some(" "), Some(" x ")), Some("x"));
         assert_eq!(first_non_blank(Some("a"), Some("b")), Some("a"));
         assert_eq!(first_non_blank(None, None), None);
+    }
+
+    #[test]
+    fn request_callback_overrides_follow_the_https_policy() {
+        let req = FormPaymentRequest::new("ORDER001", "P", money())
+            .notify_url("http://localhost:8080/notify");
+        assert!(req.validate().is_ok(), "structure is fine");
+        assert!(matches!(
+            req.prepare(&config(None)),
+            Err(Error::Param(m)) if m.starts_with("notify_url must use HTTPS")
+        ));
+        let mut parts = crate::config::ConfigParts::new(1001, "k", "https://pay.example.com");
+        parts.allow_insecure_callback_http = true;
+        let permissive = Config::from_parts(parts).unwrap();
+        assert_eq!(
+            req.prepare(&permissive).unwrap().notify_url,
+            "http://localhost:8080/notify"
+        );
     }
 
     #[test]

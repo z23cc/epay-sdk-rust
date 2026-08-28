@@ -4,6 +4,7 @@
 //! EPAY_PID=1001 EPAY_KEY=your-key EPAY_API_URL=https://pay.example.com \
 //! EPAY_NOTIFY_URL=http://localhost:8080/notify \
 //! EPAY_RETURN_URL=http://localhost:8080/return \
+//! EPAY_ALLOW_INSECURE_CALLBACK_HTTP=1 \
 //! cargo run --example axum_server --features axum
 //! ```
 
@@ -72,7 +73,7 @@ fn default_name() -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = env_logger::try_init();
     // Fall back to demo settings only when EPay is entirely unconfigured.
-    const EPAY_VARS: [&str; 9] = [
+    const EPAY_VARS: &[&str] = &[
         "EPAY_PID",
         "EPAY_KEY",
         "EPAY_API_URL",
@@ -80,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "EPAY_RETURN_URL",
         "EPAY_DEBUG",
         "EPAY_ALLOW_INSECURE_HTTP",
+        "EPAY_ALLOW_INSECURE_CALLBACK_HTTP",
         "EPAY_TIMEOUT_SECS",
         "EPAY_MAX_RESPONSE_BYTES",
     ];
@@ -93,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Client::builder(1001, "demo-key", "https://pay.example.com")
             .notify_url("http://localhost:8080/notify")
             .return_url("http://localhost:8080/return")
+            .allow_insecure_callback_http(true) // demo only
             .timeout(Duration::from_secs(30))
             .debug(true)
             .build()?

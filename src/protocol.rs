@@ -146,7 +146,8 @@ impl ProtocolContextBuilder {
     /// | `EPAY_NOTIFY_URL` | no | default notify URL |
     /// | `EPAY_RETURN_URL` | no | default return URL |
     /// | `EPAY_DEBUG` | no | `true`/`false` |
-    /// | `EPAY_ALLOW_INSECURE_HTTP` | no | `true`/`false` |
+    /// | `EPAY_ALLOW_INSECURE_HTTP` | no | `true`/`false` (plain-HTTP gateway) |
+    /// | `EPAY_ALLOW_INSECURE_CALLBACK_HTTP` | no | `true`/`false` (plain-HTTP callbacks) |
     ///
     /// Malformed typed values fail instead of falling back to defaults.
     pub fn from_env() -> Result<Self> {
@@ -175,6 +176,15 @@ impl ProtocolContextBuilder {
         if let Some(value) = env::typed(lookup, "EPAY_ALLOW_INSECURE_HTTP", INSECURE)? {
             builder = builder.allow_insecure_http(env::parse_bool(&value, INSECURE)?);
         }
+        const INSECURE_CALLBACK: &str = "EPAY_ALLOW_INSECURE_CALLBACK_HTTP must be a boolean";
+        if let Some(value) = env::typed(
+            lookup,
+            "EPAY_ALLOW_INSECURE_CALLBACK_HTTP",
+            INSECURE_CALLBACK,
+        )? {
+            builder =
+                builder.allow_insecure_callback_http(env::parse_bool(&value, INSECURE_CALLBACK)?);
+        }
         Ok(builder)
     }
 
@@ -199,6 +209,13 @@ impl ProtocolContextBuilder {
     /// Allow a plain-HTTP gateway (legacy deployments only).
     pub fn allow_insecure_http(mut self, allow: bool) -> Self {
         self.parts.allow_insecure_http = allow;
+        self
+    }
+
+    /// Allow plain-HTTP `notify_url` / `return_url` (local testing only).
+    /// Applies to configured defaults and to request-level overrides.
+    pub fn allow_insecure_callback_http(mut self, allow: bool) -> Self {
+        self.parts.allow_insecure_callback_http = allow;
         self
     }
 
@@ -252,10 +269,11 @@ mod tests {
             ("EPAY_PID", "1001"),
             ("EPAY_KEY", "k"),
             ("EPAY_API_URL", "http://legacy.example.com"),
-            ("EPAY_NOTIFY_URL", "https://shop.example.com/notify"),
+            ("EPAY_NOTIFY_URL", "http://localhost:8080/notify"),
             ("EPAY_RETURN_URL", ""),
             ("EPAY_DEBUG", "true"),
             ("EPAY_ALLOW_INSECURE_HTTP", "1"),
+            ("EPAY_ALLOW_INSECURE_CALLBACK_HTTP", "yes"),
         ]
         .into();
         let context = ProtocolContextBuilder::from_env_with(&lookup(&vars))
@@ -265,6 +283,17 @@ mod tests {
         assert_eq!(context.config().pid(), 1001);
         assert!(context.config().debug());
         assert!(context.config().allow_insecure_http());
+        assert!(context.config().allow_insecure_callback_http());
+
+        let mut strict = vars.clone();
+        strict.remove("EPAY_ALLOW_INSECURE_CALLBACK_HTTP");
+        assert!(
+            ProtocolContextBuilder::from_env_with(&lookup(&strict))
+                .unwrap()
+                .build()
+                .is_err(),
+            "http notify_url needs the explicit opt-in"
+        );
         assert!(context.config().notify_url().is_some());
         assert!(context.config().return_url().is_none());
     }

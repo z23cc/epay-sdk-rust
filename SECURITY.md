@@ -37,7 +37,10 @@ some weaknesses are inherent and must be handled by the application:
   CDN access logs on the path to the gateway will contain it — use HTTPS end
   to end and trust the operators of that path.
 - **Plain HTTP gateways** are refused unless `allow_insecure_http(true)` is
-  set explicitly; do not enable it in production.
+  set explicitly, and **plain HTTP callback URLs** are refused unless
+  `allow_insecure_callback_http(true)` is set; do not enable either in
+  production. A callback over HTTP exposes the signed payment result to
+  on-path readers, who can replay it.
 
 ## What the SDK guarantees
 

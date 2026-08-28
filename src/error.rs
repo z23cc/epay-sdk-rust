@@ -267,6 +267,14 @@ impl Error {
     pub const INVALID_NOTIFY_URL: Self = Self::Param("notify_url must be an absolute HTTP(S) URL");
     /// `return_url` is not an absolute HTTP(S) URL.
     pub const INVALID_RETURN_URL: Self = Self::Param("return_url must be an absolute HTTP(S) URL");
+    /// `notify_url` uses plain HTTP without explicit opt-in.
+    pub const INSECURE_NOTIFY_URL: Self = Self::Param(
+        "notify_url must use HTTPS; call allow_insecure_callback_http(true) for local testing",
+    );
+    /// `return_url` uses plain HTTP without explicit opt-in.
+    pub const INSECURE_RETURN_URL: Self = Self::Param(
+        "return_url must use HTTPS; call allow_insecure_callback_http(true) for local testing",
+    );
     /// `out_trade_no` is empty.
     pub const MISSING_OUT_TRADE_NO: Self = Self::Param("out_trade_no is required");
     /// `out_trade_no` violates the accepted charset or length.

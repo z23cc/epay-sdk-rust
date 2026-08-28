@@ -1,4 +1,4 @@
-use crate::config::parse_callback_url;
+use crate::config::{parse_callback_url, require_https_callback};
 use crate::error::{Error, Result};
 use crate::types::{Device, PayType};
 
@@ -49,12 +49,25 @@ pub(crate) fn validate_device(value: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Structural check only; the HTTPS policy is applied when the request is
+/// resolved against a [`crate::Config`].
 pub(crate) fn validate_notify_url(raw: &str) -> Result<()> {
     parse_callback_url(raw, Error::INVALID_NOTIFY_URL).map(|_| ())
 }
 
+/// Structural check only; see [`validate_notify_url`].
 pub(crate) fn validate_return_url(raw: &str) -> Result<()> {
     parse_callback_url(raw, Error::INVALID_RETURN_URL).map(|_| ())
+}
+
+pub(crate) fn enforce_notify_url_policy(raw: &str, allow_http: bool) -> Result<()> {
+    let url = parse_callback_url(raw, Error::INVALID_NOTIFY_URL)?;
+    require_https_callback(&url, allow_http, Error::INSECURE_NOTIFY_URL)
+}
+
+pub(crate) fn enforce_return_url_policy(raw: &str, allow_http: bool) -> Result<()> {
+    let url = parse_callback_url(raw, Error::INVALID_RETURN_URL)?;
+    require_https_callback(&url, allow_http, Error::INSECURE_RETURN_URL)
 }
 
 pub(crate) fn exactly_one_identifier<'a>(
@@ -125,5 +138,15 @@ mod tests {
             validate_return_url("https://u:p@shop.example.com/r"),
             Err(Error::Param(m)) if m.starts_with("return_url")
         ));
+        assert!(
+            validate_notify_url("http://localhost/notify").is_ok(),
+            "structural only"
+        );
+        assert!(matches!(
+            enforce_notify_url_policy("http://localhost/notify", false),
+            Err(Error::Param(m)) if m.starts_with("notify_url must use HTTPS")
+        ));
+        assert!(enforce_notify_url_policy("http://localhost/notify", true).is_ok());
+        assert!(enforce_return_url_policy("https://shop.example.com/r", false).is_ok());
     }
 }

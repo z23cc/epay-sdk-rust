@@ -653,6 +653,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Allow plain-HTTP callbacks. See
+    /// [`ProtocolContextBuilder::allow_insecure_callback_http`].
+    pub fn allow_insecure_callback_http(mut self, allow: bool) -> Self {
+        self.protocol = self.protocol.allow_insecure_callback_http(allow);
+        self
+    }
+
     /// Use a custom transport instead of reqwest.
     pub fn transport(mut self, transport: impl Transport + 'static) -> Self {
         self.transport = Some(Box::new(transport));

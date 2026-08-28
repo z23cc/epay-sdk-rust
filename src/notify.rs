@@ -50,7 +50,9 @@ pub enum NotifySource {
 }
 
 /// One decoded key/value pair with its origin.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` masks the values of `key` and `sign`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct RawNotifyEntry {
     /// Decoded field name.
     pub key: String,
@@ -60,10 +62,34 @@ pub struct RawNotifyEntry {
     pub source: NotifySource,
 }
 
+impl std::fmt::Debug for RawNotifyEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value: &dyn std::fmt::Debug = if matches!(self.key.as_str(), "key" | "sign") {
+            &"***"
+        } else {
+            &self.value
+        };
+        f.debug_struct("RawNotifyEntry")
+            .field("key", &self.key)
+            .field("value", value)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
 /// Source-preserving, duplicate-aware notify parameters.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `Debug` masks `key` / `sign` values so a logged notification cannot be
+/// replayed from the log.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct RawNotifyParams {
     entries: Vec<RawNotifyEntry>,
+}
+
+impl std::fmt::Debug for RawNotifyParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(&self.entries).finish()
+    }
 }
 
 impl RawNotifyParams {
@@ -344,6 +370,21 @@ mod tests {
         params.insert("money", "10.00");
         params.insert("trade_status", "TRADE_SUCCESS");
         signer.sign_with_params(params)
+    }
+
+    #[test]
+    fn raw_params_debug_masks_signature_and_key() {
+        let raw = parse_raw_notify_params(
+            Some("pid=1001&sign=deadbeef&key=super-secret"),
+            Some("out_trade_no=ORDER001"),
+        )
+        .unwrap();
+        let text = format!("{raw:?}");
+        assert!(!text.contains("deadbeef"), "{text}");
+        assert!(!text.contains("super-secret"), "{text}");
+        assert!(text.contains("ORDER001"), "{text}");
+        assert!(text.contains("***"), "{text}");
+        assert_eq!(raw.entries()[1].value, "deadbeef", "values stay readable");
     }
 
     #[test]

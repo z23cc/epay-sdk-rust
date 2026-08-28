@@ -51,7 +51,9 @@ the unpublished 0.1 line.
 ### Changed
 - `mapi.php` is sent as `POST`; `clientip` is required and validated.
 - Refund is `POST api.php?act=refund` with `act` in the query string.
-- API base URL must be HTTPS unless `allow_insecure_http(true)`.
+- API base URL must be HTTPS unless `allow_insecure_http(true)`; callback
+  URLs (configured defaults and request overrides) must be HTTPS unless
+  `allow_insecure_callback_http(true)` / `EPAY_ALLOW_INSECURE_CALLBACK_HTTP`.
 - SDK-created reqwest client: no redirects, streaming response limit
   (1 MiB default), URL-free error messages, per-request timeouts. A
   caller-supplied `reqwest::Client` keeps its own redirect policy.
@@ -79,6 +81,8 @@ the unpublished 0.1 line.
   logs and error text; `MerchantInfo` masks the echoed key in `Debug`.
 - The merchant key is held once, shared by `Config` and `Signer`, and
   zeroized when the last handle is dropped.
+- `RawNotifyParams` / `RawNotifyEntry` / `NotifyFixture` mask `key` and
+  `sign` in `Debug`, so a logged notification cannot be replayed from logs.
 - `MockTransport::recorded()` stores query/form as `Params` (redacting
   `Debug`) rather than a URL containing `key=`.
 - Notifications must carry `sign_type=MD5`, match the configured PID and
