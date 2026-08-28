@@ -26,6 +26,27 @@ fn debug_url(value: &Option<String>) -> Option<String> {
     value.as_deref().map(redact_url_query)
 }
 
+/// `Debug` helper for payment links, which may carry one-time tokens in the
+/// path as well as the query: keep only scheme and host.
+fn debug_payment_link(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    match Url::parse(value) {
+        Ok(url) => format!(
+            "{}://{}/<redacted>",
+            url.scheme(),
+            url.host_str().unwrap_or_default()
+        ),
+        Err(_) => format!("<invalid url: {} bytes>", value.len()),
+    }
+}
+
+fn non_blank(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 fn debug_len(value: &Option<String>) -> Option<String> {
     value
         .as_ref()
@@ -336,9 +357,10 @@ impl FormPaymentRequest {
 ///
 /// The gateway returns whichever destination fits the channel/device; at
 /// least one of `pay_url`, `qr_code` and `url_scheme` is guaranteed non-empty.
-/// `Debug` masks the query strings of `pay_url` / `url_scheme`, shows
+/// `Debug` reduces `pay_url` / `url_scheme` to scheme and host, shows
 /// `qr_code` (arbitrary text) as a length and `extra` as its keys, so
-/// one-time payment links do not land in logs.
+/// one-time payment links do not land in logs even when the token is in the
+/// path.
 #[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct PaymentResponse {
@@ -364,8 +386,8 @@ pub struct PaymentResponse {
 /// The SDK does not allow-list schemes or hosts: before redirecting a browser
 /// to a [`PaymentDestination::PayUrl`] or handing an
 /// [`PaymentDestination::UrlScheme`] to an app, apply your own policy (e.g.
-/// HTTPS only, known `alipays://` / `weixin://` schemes). `Debug` masks query
-/// strings.
+/// HTTPS only, known `alipays://` / `weixin://` schemes). Values are
+/// trimmed. `Debug` shows only scheme and host.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PaymentDestination<'a> {
@@ -403,7 +425,9 @@ impl fmt::Debug for PaymentDestination<'_> {
             Self::QrCode(value) => ("QrCode", *value),
             Self::UrlScheme(value) => ("UrlScheme", *value),
         };
-        f.debug_tuple(name).field(&redact_url_query(value)).finish()
+        f.debug_tuple(name)
+            .field(&debug_payment_link(value))
+            .finish()
     }
 }
 
@@ -412,27 +436,30 @@ impl fmt::Debug for PaymentResponse {
         let extra_keys: Vec<&str> = self.extra.keys().map(String::as_str).collect();
         f.debug_struct("PaymentResponse")
             .field("trade_no", &self.trade_no)
-            .field("pay_url", &redact_url_query(&self.pay_url))
+            .field("pay_url", &debug_payment_link(&self.pay_url))
             .field("qr_code", &format_args!("<{} bytes>", self.qr_code.len()))
-            .field("url_scheme", &redact_url_query(&self.url_scheme))
+            .field("url_scheme", &debug_payment_link(&self.url_scheme))
             .field("extra_keys", &extra_keys)
             .finish()
     }
 }
 
 impl PaymentResponse {
-    /// All non-empty destinations in the order `pay_url`, `qr_code`,
-    /// `url_scheme`.
+    /// All non-blank destinations (trimmed) in the order `pay_url`,
+    /// `qr_code`, `url_scheme` — the same test [`Client`] applies when it
+    /// validates the response.
+    ///
+    /// [`Client`]: crate::Client
     pub fn destinations(&self) -> Vec<PaymentDestination<'_>> {
         let mut out = Vec::with_capacity(3);
-        if !self.pay_url.is_empty() {
-            out.push(PaymentDestination::PayUrl(&self.pay_url));
+        if let Some(value) = non_blank(&self.pay_url) {
+            out.push(PaymentDestination::PayUrl(value));
         }
-        if !self.qr_code.is_empty() {
-            out.push(PaymentDestination::QrCode(&self.qr_code));
+        if let Some(value) = non_blank(&self.qr_code) {
+            out.push(PaymentDestination::QrCode(value));
         }
-        if !self.url_scheme.is_empty() {
-            out.push(PaymentDestination::UrlScheme(&self.url_scheme));
+        if let Some(value) = non_blank(&self.url_scheme) {
+            out.push(PaymentDestination::UrlScheme(value));
         }
         out
     }
@@ -449,10 +476,7 @@ impl PaymentResponse {
                 "successful response has a missing or invalid trade_no",
             )
         })?;
-        if self.pay_url.trim().is_empty()
-            && self.qr_code.trim().is_empty()
-            && self.url_scheme.trim().is_empty()
-        {
+        if self.destinations().is_empty() {
             return Err(Error::invalid_response_message(
                 Endpoint::CreatePayment,
                 "successful response has no payment destination",
@@ -462,24 +486,43 @@ impl PaymentResponse {
     }
 }
 
-/// A signed `submit.php` payload for the application to render.
+/// A signed, validated, size-bounded `submit.php` payload for the
+/// application to render.
 ///
 /// [`crate::ProtocolContext::build_form_payment`] wraps this in a page with
 /// an inline `<script>` that submits automatically, which a strict CSP
 /// blocks. With `PreparedForm` you can render the inputs yourself and submit
-/// via a nonce'd script, an external script or a plain button. `Debug`
-/// masks the signature.
+/// via a nonce'd script, an external script or a plain button. The parts are
+/// read-only so the signature stays valid; [`PreparedForm::into_parts`]
+/// hands them over for advanced use. `Debug` masks the signature.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct PreparedForm {
-    /// `submit.php` endpoint to POST to (or redirect to with
-    /// [`PreparedForm::redirect_url`]).
-    pub action: Url,
-    /// Signed parameters, including `sign` and `sign_type`.
-    pub params: Params,
+    action: Url,
+    params: Params,
 }
 
 impl PreparedForm {
+    pub(crate) fn new(action: Url, params: Params) -> Self {
+        Self { action, params }
+    }
+
+    /// `submit.php` endpoint to POST to (or redirect to with
+    /// [`PreparedForm::redirect_url`]).
+    pub fn action(&self) -> &Url {
+        &self.action
+    }
+
+    /// Signed parameters, including `sign` and `sign_type`.
+    pub fn params(&self) -> &Params {
+        &self.params
+    }
+
+    /// Take ownership of the parts. Anything you change afterwards is no
+    /// longer covered by the signature or the size limits.
+    pub fn into_parts(self) -> (Url, Params) {
+        (self.action, self.params)
+    }
+
     /// HTML-escaped `<input type="hidden">` elements for every parameter.
     pub fn hidden_inputs(&self) -> String {
         let mut fields = String::new();
@@ -653,12 +696,16 @@ mod tests {
         assert!(!format!("{form:?}").contains("sid=abc"));
 
         let response: PaymentResponse = serde_json::from_str(
-            r#"{"trade_no":"T1","payurl":"https://pay.example.com/cashier?token=onetime","qrcode":"weixin://wxpay/bizpayurl?pr=onetime3","urlscheme":"alipays://platformapi/startapp?appId=1&code=onetime2","fork_field":"fork-secret"}"#,
+            r#"{"trade_no":"T1","payurl":"https://pay.example.com/cashier/onetime-path?token=onetime","qrcode":"weixin://wxpay/bizpayurl?pr=onetime3","urlscheme":"alipays://platformapi/startapp?appId=1&code=onetime2","fork_field":"fork-secret"}"#,
         )
         .unwrap();
         let text = format!("{response:?}");
         assert!(!text.contains("onetime"), "{text}");
         assert!(!text.contains("fork-secret"), "{text}");
+        assert!(
+            text.contains("https://pay.example.com/<redacted>"),
+            "{text}"
+        );
         assert!(text.contains("fork_field") && text.contains("T1"), "{text}");
 
         let unvalidated = PaymentRequest::new(PayType::Alipay, "O", "P", money())
@@ -682,6 +729,16 @@ mod tests {
 
         let empty: PaymentResponse = serde_json::from_str(r#"{"trade_no":"T1"}"#).unwrap();
         assert!(empty.destination().is_none());
+
+        let blank_first: PaymentResponse =
+            serde_json::from_str(r#"{"trade_no":"T1","payurl":"  ","qrcode":" weixin://x "}"#)
+                .unwrap();
+        assert!(blank_first.validate_success().is_ok());
+        assert_eq!(
+            blank_first.destination(),
+            Some(PaymentDestination::QrCode("weixin://x")),
+            "blank pay_url is skipped and values are trimmed"
+        );
         assert!(PaymentDestination::QrCode("not a url").parse_url().is_err());
     }
 
@@ -691,10 +748,12 @@ mod tests {
         params.insert("pid", "1001");
         params.insert("name", "A&B <x>");
         params.insert("sign", "deadbeef");
-        let form = PreparedForm {
-            action: Url::parse("https://pay.example.com/submit.php").unwrap(),
+        let form = PreparedForm::new(
+            Url::parse("https://pay.example.com/submit.php").unwrap(),
             params,
-        };
+        );
+        assert_eq!(form.action().as_str(), "https://pay.example.com/submit.php");
+        assert_eq!(form.params().get("pid"), Some("1001"));
         let inputs = form.hidden_inputs();
         assert!(
             inputs.contains(r#"name="name" value="A&amp;B &lt;x&gt;""#),
@@ -711,6 +770,9 @@ mod tests {
             !format!("{form:?}").contains("deadbeef"),
             "sign is redacted"
         );
+        let (action, params) = form.into_parts();
+        assert_eq!(action.path(), "/submit.php");
+        assert_eq!(params.len(), 3);
     }
 
     #[test]

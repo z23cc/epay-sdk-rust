@@ -318,11 +318,16 @@ impl HttpConfig {
         self
     }
 
-    /// Separate TCP/TLS connect timeout for the built-in transport; `None`
-    /// leaves only the per-attempt timeout.
-    pub fn with_connect_timeout(mut self, connect_timeout: Option<Duration>) -> Self {
-        self.connect_timeout = connect_timeout.filter(|value| !value.is_zero());
-        self
+    /// Separate TCP/TLS connect timeout for the SDK-created reqwest client;
+    /// `None` leaves only the per-attempt timeout. Zero is rejected rather
+    /// than silently disabling the limit. Not applied to caller-supplied
+    /// `reqwest::Client`s or custom transports.
+    pub fn with_connect_timeout(mut self, connect_timeout: Option<Duration>) -> Result<Self> {
+        if connect_timeout.is_some_and(|value| value.is_zero()) {
+            return Err(Error::Config("connect timeout must be greater than 0"));
+        }
+        self.connect_timeout = connect_timeout;
+        Ok(self)
     }
 
     /// Per-attempt request timeout applied by the built-in transport.
@@ -532,13 +537,14 @@ mod tests {
         );
         assert_eq!(http.retry(), &RetryPolicy::NONE);
         assert_eq!(http.connect_timeout(), None);
-        let http = http.with_connect_timeout(Some(Duration::from_secs(5)));
+        let http = http
+            .with_connect_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         assert_eq!(http.connect_timeout(), Some(Duration::from_secs(5)));
-        assert_eq!(
-            http.with_connect_timeout(Some(Duration::ZERO))
-                .connect_timeout(),
-            None
-        );
+        assert!(matches!(
+            http.with_connect_timeout(Some(Duration::ZERO)),
+            Err(Error::Config(m)) if m.starts_with("connect timeout")
+        ));
     }
 
     #[test]

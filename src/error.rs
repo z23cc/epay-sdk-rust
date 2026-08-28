@@ -47,9 +47,10 @@ pub enum TransportErrorKind {
 
 /// Stable, coarse error category for metrics and HTTP mapping.
 ///
-/// Unlike matching on the `#[non_exhaustive]` [`Error`], this enum is meant
-/// to be matched exhaustively and will only grow in a minor release with a
-/// changelog entry.
+/// Low-cardinality and independent of the [`Error`] variants' payloads, so
+/// it is the right thing to match on in application code. It is still
+/// `#[non_exhaustive]`: keep a fallback arm, because a new category may be
+/// added in a future minor release (always with a changelog entry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ErrorKind {

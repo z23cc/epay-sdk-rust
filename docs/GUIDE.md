@@ -100,18 +100,18 @@ let url = epay.build_form_payment_url(&request)?;
 # fn demo(epay: &epay_sdk::ProtocolContext, request: &epay_sdk::FormPaymentRequest) -> epay_sdk::Result<()> {
 let form = epay.prepare_form_payment(request)?;
 // 方式一：自己的模板 + nonce 脚本 / 提交按钮
- let html = format!(
+let html = format!(
     r#"<form id="pay" method="POST" action="{}">{}<button>前往支付</button></form>"#,
-    form.action, form.hidden_inputs()
+    form.action(), form.hidden_inputs()
 );
 // 方式二：GET 重定向
- let redirect = form.redirect_url();
+let redirect = form.redirect_url();
 # let _ = (html, redirect);
 # Ok(())
 # }
 ```
 
-`form.params` 是 `Params`，`Debug` 会脱敏 `sign`。
+`form.params()` 是只读的 `Params`（`Debug` 脱敏 `sign`）；`into_parts()` 可以拿走所有权，但之后的修改不再受签名和大小限制保护。
 
 ## 支付目标地址
 
@@ -155,7 +155,7 @@ if let Some(fee) = order.extra.get("pay_fee").and_then(|v| v.as_str()) {
 
 默认不重试。`RetryPolicy` 只对 **GET** 端点（订单 / 商户 / 结算查询）且只对 `Error::is_retryable()` 为真的失败（超时、连接失败、502/503/504）生效；`mapi.php` 下单和退款永远不自动重试。
 
-**超时是 per-attempt 的**：`timeout` 约束单次尝试，每次重试重新计时，退避延迟不计入；开启 2 次重试后一次 GET 最长可达 `3 × timeout + 退避`。需要总体 deadline 的地方（比如 durable job）保持 `RetryPolicy::NONE`，由外层调度器控制重试。`connect_timeout` 可单独约束 TCP/TLS 建连。
+**超时是 per-attempt 的**：`timeout` 约束单次尝试，每次重试重新计时，退避延迟不计入；开启 2 次重试后一次 GET 最长可达 `3 × timeout + 退避`。需要总体 deadline 的地方（比如 durable job）保持 `RetryPolicy::NONE`，由外层调度器控制重试。`connect_timeout` 可单独约束 TCP/TLS 建连，只对 SDK 自建的 reqwest 客户端生效：与 `reqwest_client(…)` 同时设置会在 `build()` 报错，自定义 `Transport` 则需自行配置；值为 0 同样报错而不是静默禁用。
 
 ```rust
 use std::time::Duration;
@@ -206,7 +206,7 @@ fn classify(error: &Error) -> &'static str {
 }
 ```
 
-`Error` 是 `#[non_exhaustive]`，业务代码不必匹配它：`Error::kind()` 返回稳定的 `ErrorKind`（`Config` / `InvalidParameter` / `Verification` / `Provider` / `Transport` / `InvalidResponse`），`Error::endpoint()` 给出涉及的网关端点，适合指标标签和 HTTP 状态码映射；`Error::code()` 提供与 Go SDK 一致的数字码，`Error::transport_kind()` / `is_timeout()` / `is_retryable()` 提供传输层分类。所有错误文本都会对 `key` / `sign` 脱敏；内置 reqwest transport 的错误只包含固定分类消息，不含请求 URL。
+`Error` 是 `#[non_exhaustive]`，业务代码不必匹配它：`Error::kind()` 返回稳定的低基数 `ErrorKind`（`Config` / `InvalidParameter` / `Verification` / `Provider` / `Transport` / `InvalidResponse`；同样是 `#[non_exhaustive]`，请保留兜底分支），`Error::endpoint()` 给出涉及的网关端点，适合指标标签和 HTTP 状态码映射；`Error::code()` 提供与 Go SDK 一致的数字码，`Error::transport_kind()` / `is_timeout()` / `is_retryable()` 提供传输层分类。所有错误文本都会对 `key` / `sign` 脱敏；内置 reqwest transport 的错误只包含固定分类消息，不含请求 URL。
 
 SDK 有意不为 `Error` 实现 `IntoResponse`：网关错误文案不应该原样送到浏览器。在 Axum 里用一个 newtype 统一映射：
 

@@ -640,8 +640,11 @@ impl ClientBuilder {
         self
     }
 
-    /// TCP/TLS connect timeout for the built-in transport (default: none
-    /// beyond the per-attempt timeout).
+    /// TCP/TLS connect timeout for the SDK-created reqwest client (default:
+    /// none beyond the per-attempt timeout). Zero fails at [`Self::build`].
+    /// It cannot be applied to a caller-supplied [`Self::reqwest_client`]
+    /// (that combination fails at build) or to a custom [`Self::transport`]
+    /// (silently not applicable; configure the transport itself).
     pub fn connect_timeout(mut self, connect_timeout: Duration) -> Self {
         self.connect_timeout = Some(connect_timeout);
         self
@@ -708,9 +711,15 @@ impl ClientBuilder {
 
     /// Validate settings and build the client.
     pub fn build(self) -> Result<Client> {
+        #[cfg(any(feature = "reqwest-rustls", feature = "reqwest-native-tls"))]
+        if self.reqwest_client.is_some() && self.connect_timeout.is_some() {
+            return Err(Error::Config(
+                "connect_timeout cannot be applied to a caller-supplied reqwest::Client; configure it on that client instead",
+            ));
+        }
         let http = HttpConfig::new(self.timeout, self.max_response_body_bytes)?
             .with_retry(self.retry)
-            .with_connect_timeout(self.connect_timeout);
+            .with_connect_timeout(self.connect_timeout)?;
         let protocol = self.protocol.build()?;
         let transport = if let Some(transport) = self.transport {
             transport
@@ -1224,6 +1233,21 @@ mod tests {
                 .build(),
             Err(Error::Config(_))
         ));
+        assert!(matches!(
+            Client::builder(1001, "k", "https://pay.example.com")
+                .connect_timeout(Duration::ZERO)
+                .transport(MockTransport::new())
+                .build(),
+            Err(Error::Config(m)) if m.starts_with("connect timeout")
+        ));
+        #[cfg(any(feature = "reqwest-rustls", feature = "reqwest-native-tls"))]
+        assert!(matches!(
+            Client::builder(1001, "k", "https://pay.example.com")
+                .connect_timeout(Duration::from_secs(1))
+                .reqwest_client(reqwest::Client::new())
+                .build(),
+            Err(Error::Config(m)) if m.contains("caller-supplied")
+        ));
         let client = Client::with_transport(
             ProtocolContext::new(1001, "k", "https://pay.example.com").unwrap(),
             HttpConfig::default(),
@@ -1262,7 +1286,11 @@ mod tests {
         assert_eq!(client.http_config().max_response_body_bytes(), 4096);
         assert_eq!(client.http_config().retry().max_retries(), 3);
 
-        for (name, value) in [("EPAY_TIMEOUT_SECS", "soon"), ("EPAY_MAX_RETRIES", "-1")] {
+        for (name, value) in [
+            ("EPAY_TIMEOUT_SECS", "soon"),
+            ("EPAY_MAX_RETRIES", "-1"),
+            ("EPAY_CONNECT_TIMEOUT_SECS", "0"),
+        ] {
             let mut bad = vars.clone();
             bad.insert(name, value);
             let lookup = |name: &str| {
@@ -1271,7 +1299,11 @@ mod tests {
                     .ok_or(std::env::VarError::NotPresent)
             };
             assert!(
-                matches!(ClientBuilder::from_env_with(&lookup), Err(Error::Config(_))),
+                matches!(
+                    ClientBuilder::from_env_with(&lookup)
+                        .and_then(|builder| builder.transport(MockTransport::new()).build()),
+                    Err(Error::Config(_))
+                ),
                 "{name}={value}"
             );
         }

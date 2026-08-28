@@ -30,7 +30,7 @@
 //! | `reqwest-native-tls` | no | built-in transport with native TLS |
 //! | `axum` | no | Axum 0.8 extractors ([`axum`]) |
 //! | `blocking` | no | [`blocking::Client`] for non-async programs |
-//! | `tracing` | no | `tracing` spans/events for every gateway call (in addition to `log`) |
+//! | `tracing` | no | `tracing` spans/events for every gateway call (replaces `log` output) |
 //! | `test-util` | no | [`test_util`]: [`MockTransport`], [`test_util::NotifyFixture`] |
 
 #![cfg_attr(docsrs, feature(doc_cfg))]

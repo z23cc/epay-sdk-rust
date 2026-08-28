@@ -85,10 +85,10 @@ impl ProtocolContext {
 
     /// Signed `submit.php` parts for custom rendering (CSP-friendly).
     pub fn prepare_form_payment(&self, req: &FormPaymentRequest) -> Result<PreparedForm> {
-        Ok(PreparedForm {
-            action: self.inner.config.endpoint(path::SUBMIT)?,
-            params: self.form_params(req)?,
-        })
+        Ok(PreparedForm::new(
+            self.inner.config.endpoint(path::SUBMIT)?,
+            self.form_params(req)?,
+        ))
     }
 
     /// Signed `submit.php` URL for a browser redirect.
@@ -273,10 +273,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            prepared.action.as_str(),
+            prepared.action().as_str(),
             "https://pay.example.com/epay/submit.php"
         );
-        assert!(context.verify(&prepared.params, prepared.params.get("sign").unwrap()));
+        assert!(context.verify(prepared.params(), prepared.params().get("sign").unwrap()));
         assert_eq!(prepared.auto_submit_html(), html);
     }
 
