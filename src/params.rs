@@ -153,14 +153,18 @@ fn redacted_value(key: &str, value: &str) -> String {
     value.to_owned()
 }
 
-/// Mask the query string of a URL-like value for logs; non-URLs pass through.
+/// Mask the query string of a URL value for logs. Values that do not parse
+/// as a URL are summarised by length so an unvalidated `?token=` never
+/// reaches the output.
 pub(crate) fn redact_url_query(value: &str) -> String {
     match url::Url::parse(value) {
-        Ok(mut url) if url.query().is_some() => {
-            url.set_query(Some("***"));
+        Ok(mut url) => {
+            if url.query().is_some() {
+                url.set_query(Some("***"));
+            }
             url.to_string()
         }
-        _ => value.to_owned(),
+        Err(_) => format!("<invalid url: {} bytes>", value.len()),
     }
 }
 
@@ -240,6 +244,21 @@ mod tests {
             assert!(!s.contains("callback-secret"), "{s}");
             assert!(s.contains("1001"), "{s}");
         }
+    }
+
+    #[test]
+    fn url_redaction_never_echoes_unparseable_input() {
+        assert_eq!(
+            redact_url_query("https://shop.example/notify?token=secret"),
+            "https://shop.example/notify?***"
+        );
+        assert_eq!(
+            redact_url_query("https://shop.example/notify"),
+            "https://shop.example/notify"
+        );
+        let text = redact_url_query("not a url?token=secret");
+        assert!(!text.contains("secret"), "{text}");
+        assert_eq!(text, "<invalid url: 22 bytes>");
     }
 
     #[test]

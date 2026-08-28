@@ -51,7 +51,7 @@ test-util feature → MockTransport、NotifyFixture
 ```
 
 - 网关响应先校验 `code` / `msg` 包络，再解析成功结构；成功结构不携带 `code`（退款回执保留 `msg`）。
-- 请求 / 响应类型的 `Debug` 掩盖回调与支付链接的 query，`param` 只显示长度。
+- 请求 / 响应类型的 `Debug` 掩盖回调与支付链接的 query（无法解析的 URL 只显示长度），`param` / `qr_code` 只显示长度，`extra` 只显示键。
 - `api.php` 只使用官方 `pid + key` 鉴权。
 - 通知 query + form 合计最多 16 KiB，重复字段和冲突字段直接拒绝。
 
@@ -268,9 +268,9 @@ async fn notify(result: Result<VerifiedNotify, NotifyRejection>) -> NotifyAck {
 | `sitename` | 64 字节 |
 | `notify_url` / `return_url` | 1024 字节 |
 | 自定义 `type` / `device` | 32 字节，`[A-Za-z0-9_-]` |
-| 签名后的整个请求（编码后） | 4096 字节 |
+| 每个出站请求（query + form 编码后） | 4096 字节 |
 
-超限返回 `Error::Param`（如 `NAME_TOO_LONG`、`REQUEST_TOO_LARGE`）。这些是保守值，官方 PHP 实现和数据库列都能容纳。
+`name` / `sitename` 另外拒绝控制字符。超限返回 `Error::Param`（如 `NAME_TOO_LONG`、`REQUEST_TOO_LARGE`）。总大小在 `Client` 的 GET / POST 路径上统一检查，所有端点（含查询、退款）都受约束；这些是保守值，官方 PHP 实现和数据库列都能容纳。
 
 ## 金额
 

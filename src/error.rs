@@ -286,6 +286,12 @@ impl Error {
     pub const MISSING_NAME: Self = Self::Param("name is required");
     /// Product `name` exceeds [`crate::limits::MAX_NAME_BYTES`].
     pub const NAME_TOO_LONG: Self = Self::Param("name exceeds 255 bytes");
+    /// Product `name` contains control characters.
+    pub const NAME_HAS_CONTROL_CHARS: Self =
+        Self::Param("name must not contain control characters");
+    /// `sitename` contains control characters.
+    pub const SITENAME_HAS_CONTROL_CHARS: Self =
+        Self::Param("sitename must not contain control characters");
     /// `param` exceeds [`crate::limits::MAX_PARAM_BYTES`].
     pub const PARAM_TOO_LONG: Self = Self::Param("param exceeds 255 bytes");
     /// `sitename` exceeds [`crate::limits::MAX_SITENAME_BYTES`].

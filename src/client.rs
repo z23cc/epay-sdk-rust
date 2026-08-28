@@ -19,7 +19,7 @@ use crate::protocol::{ProtocolContext, ProtocolContextBuilder};
 use crate::refund::{RefundRequest, RefundResponse};
 use crate::signer::Signer;
 use crate::transport::{Transport, TransportOptions};
-use crate::validation::validate_request_size;
+use crate::validation::validate_encoded_size;
 
 /// Per-call overrides for [`Client`] methods ending in `_with`.
 ///
@@ -191,7 +191,6 @@ impl Client {
         params.insert_opt("param", request.param.clone());
 
         let signed = self.signer().sign_with_params(params);
-        validate_request_size(&signed)?;
         let response: PaymentResponse = self
             .post_json(Endpoint::CreatePayment, &Params::new(), signed, options)
             .await?;
@@ -393,15 +392,18 @@ impl Client {
             .with_timeout(Some(options.timeout.unwrap_or(self.inner.http.timeout())))
     }
 
-    /// GET with the configured retry policy for retryable failures.
+    /// GET with the configured retry policy for retryable failures. Every
+    /// outbound request passes the size bound here or in [`Self::post_json`].
     async fn get_json<R: DeserializeOwned>(
         &self,
         endpoint: Endpoint,
         params: Params,
         options: &CallOptions,
     ) -> Result<R> {
+        let encoded = params.encode();
+        validate_encoded_size(encoded.len())?;
         let mut url = self.config().endpoint(endpoint.path())?;
-        url.set_query(Some(&params.encode()));
+        url.set_query(Some(&encoded));
         if self.config().debug() {
             let mut safe_url = self.config().endpoint(endpoint.path())?;
             safe_url.set_query(Some(&params.redacted_encode()));
@@ -443,9 +445,11 @@ impl Client {
         form: Params,
         options: &CallOptions,
     ) -> Result<R> {
+        let encoded_query = query.encode();
+        validate_encoded_size(encoded_query.len() + form.encode().len())?;
         let mut url = self.config().endpoint(endpoint.path())?;
         if !query.is_empty() {
-            url.set_query(Some(&query.encode()));
+            url.set_query(Some(&encoded_query));
         }
         if self.config().debug() {
             sdk_debug!("[epay-sdk] POST {url} form={}", form.redacted_encode());
@@ -1157,6 +1161,32 @@ mod tests {
             .unwrap();
         assert!(html.contains("payForm"));
         assert!(!html.contains("A&B"));
+    }
+
+    #[tokio::test]
+    async fn every_endpoint_is_size_bounded_before_the_transport() {
+        let transport = MockTransport::new().push_json(r#"{"code":1,"pid":1001,"money":"1.00"}"#);
+        let client = Client::builder(1001, "k".repeat(5000), "https://pay.example.com")
+            .notify_url("https://shop.example.com/notify")
+            .transport(transport.clone())
+            .build()
+            .unwrap();
+        // The merchant key travels in every api.php call (query for GET, form
+        // for POST); mapi.php sends only the signature, so it is bounded by
+        // its own field limits instead (see protocol tests).
+        for result in [
+            client.query_merchant().await.err(),
+            client.refund_by_out_trade_no("O1", money()).await.err(),
+        ] {
+            assert!(
+                matches!(result, Some(Error::Param(m)) if m.starts_with("encoded request exceeds")),
+                "{result:?}"
+            );
+        }
+        assert!(
+            transport.recorded().is_empty(),
+            "nothing reached the transport"
+        );
     }
 
     #[test]

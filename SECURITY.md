@@ -60,5 +60,7 @@ some weaknesses are inherent and must be handled by the application:
   signature, PID and all required fields validate. Rejections are logged at
   `debug` only, so unauthenticated traffic to the public callback endpoint
   cannot flood logs; observe them via `Result<VerifiedNotify, NotifyRejection>`.
-- Outbound requests are size-bounded (`epay_sdk::limits`), so application
+- Every outbound request is size-bounded before it reaches the transport
+  (`epay_sdk::limits::MAX_REQUEST_BYTES`, checked once in the client's GET
+  and POST paths and again when building `submit.php` forms), so application
   input cannot turn into oversized signed URLs or forms.

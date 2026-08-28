@@ -30,12 +30,19 @@ pub(crate) fn validate_trade_no(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn has_control_chars(value: &str) -> bool {
+    value.chars().any(char::is_control)
+}
+
 pub(crate) fn validate_name(value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(Error::MISSING_NAME);
     }
     if value.len() > limits::MAX_NAME_BYTES {
         return Err(Error::NAME_TOO_LONG);
+    }
+    if has_control_chars(value) {
+        return Err(Error::NAME_HAS_CONTROL_CHARS);
     }
     Ok(())
 }
@@ -50,6 +57,9 @@ pub(crate) fn validate_param(value: &str) -> Result<()> {
 pub(crate) fn validate_sitename(value: &str) -> Result<()> {
     if value.len() > limits::MAX_SITENAME_BYTES {
         return Err(Error::SITENAME_TOO_LONG);
+    }
+    if has_control_chars(value) {
+        return Err(Error::SITENAME_HAS_CONTROL_CHARS);
     }
     Ok(())
 }
@@ -81,7 +91,12 @@ pub(crate) fn validate_device(value: &Device) -> Result<()> {
 
 /// Bound the encoded size of a signed request.
 pub(crate) fn validate_request_size(params: &Params) -> Result<()> {
-    if params.encode().len() > limits::MAX_REQUEST_BYTES {
+    validate_encoded_size(params.encode().len())
+}
+
+/// Bound the total encoded size (query + form) of any outbound request.
+pub(crate) fn validate_encoded_size(bytes: usize) -> Result<()> {
+    if bytes > limits::MAX_REQUEST_BYTES {
         return Err(Error::REQUEST_TOO_LARGE);
     }
     Ok(())
@@ -186,6 +201,9 @@ mod tests {
         assert!(validate_param(&"p".repeat(limits::MAX_PARAM_BYTES)).is_ok());
         assert!(validate_param(&"p".repeat(limits::MAX_PARAM_BYTES + 1)).is_err());
         assert!(validate_sitename(&"s".repeat(limits::MAX_SITENAME_BYTES + 1)).is_err());
+        assert!(validate_name("tab\there").is_err());
+        assert!(validate_name("中文 名称 ok").is_ok());
+        assert!(validate_sitename("a\u{7f}b").is_err());
 
         assert!(validate_pay_type(&PayType::from("alipay_h5")).is_ok());
         assert!(validate_pay_type(&PayType::from("")).is_err());

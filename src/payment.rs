@@ -17,7 +17,7 @@ use crate::types::{Device, PayType};
 use crate::validation::{
     enforce_notify_url_policy, enforce_return_url_policy, validate_device, validate_name,
     validate_notify_url, validate_out_trade_no, validate_param, validate_pay_type,
-    validate_return_url, validate_sitename,
+    validate_return_url, validate_sitename, validate_trade_no,
 };
 
 /// `Debug` helper: callback URLs with masked query, opaque data as a length.
@@ -335,8 +335,9 @@ impl FormPaymentRequest {
 ///
 /// The gateway returns whichever destination fits the channel/device; at
 /// least one of `pay_url`, `qr_code` and `url_scheme` is guaranteed non-empty.
-/// `Debug` masks the query strings of those destinations so one-time payment
-/// links do not land in logs.
+/// `Debug` masks the query strings of `pay_url` / `url_scheme`, shows
+/// `qr_code` (arbitrary text) as a length and `extra` as its keys, so
+/// one-time payment links do not land in logs.
 #[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct PaymentResponse {
@@ -359,24 +360,25 @@ pub struct PaymentResponse {
 
 impl fmt::Debug for PaymentResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let extra_keys: Vec<&str> = self.extra.keys().map(String::as_str).collect();
         f.debug_struct("PaymentResponse")
             .field("trade_no", &self.trade_no)
             .field("pay_url", &redact_url_query(&self.pay_url))
-            .field("qr_code", &redact_url_query(&self.qr_code))
+            .field("qr_code", &format_args!("<{} bytes>", self.qr_code.len()))
             .field("url_scheme", &redact_url_query(&self.url_scheme))
-            .field("extra", &self.extra)
+            .field("extra_keys", &extra_keys)
             .finish()
     }
 }
 
 impl PaymentResponse {
     pub(crate) fn validate_success(&self) -> Result<()> {
-        if self.trade_no.trim().is_empty() {
-            return Err(Error::invalid_response_message(
+        validate_trade_no(&self.trade_no).map_err(|_| {
+            Error::invalid_response_message(
                 Endpoint::CreatePayment,
-                "successful response is missing trade_no",
-            ));
-        }
+                "successful response has a missing or invalid trade_no",
+            )
+        })?;
         if self.pay_url.trim().is_empty()
             && self.qr_code.trim().is_empty()
             && self.url_scheme.trim().is_empty()
@@ -548,16 +550,45 @@ mod tests {
         assert!(!format!("{form:?}").contains("sid=abc"));
 
         let response: PaymentResponse = serde_json::from_str(
-            r#"{"trade_no":"T1","payurl":"https://pay.example.com/cashier?token=onetime","urlscheme":"alipays://platformapi/startapp?appId=1&code=onetime2"}"#,
+            r#"{"trade_no":"T1","payurl":"https://pay.example.com/cashier?token=onetime","qrcode":"weixin://wxpay/bizpayurl?pr=onetime3","urlscheme":"alipays://platformapi/startapp?appId=1&code=onetime2","fork_field":"fork-secret"}"#,
         )
         .unwrap();
         let text = format!("{response:?}");
         assert!(!text.contains("onetime"), "{text}");
-        assert!(text.contains("T1"), "{text}");
+        assert!(!text.contains("fork-secret"), "{text}");
+        assert!(text.contains("fork_field") && text.contains("T1"), "{text}");
+
+        let unvalidated = PaymentRequest::new(PayType::Alipay, "O", "P", money())
+            .notify_url("not a url?token=secret");
+        assert!(!format!("{unvalidated:?}").contains("secret"));
+    }
+
+    #[test]
+    fn successful_response_needs_a_well_formed_trade_no() {
+        for json in [
+            r#"{"trade_no":"","payurl":"https://p"}"#,
+            r#"{"trade_no":"T-1","payurl":"https://p"}"#,
+            r#"{"trade_no":" T1","payurl":"https://p"}"#,
+        ] {
+            let response: PaymentResponse = serde_json::from_str(json).unwrap();
+            assert!(response.validate_success().is_err(), "{json}");
+        }
     }
 
     #[test]
     fn field_limits_are_enforced() {
+        assert!(matches!(
+            PaymentRequest::new(PayType::Alipay, "O", "line1\nline2", money())
+                .client_ip("::1")
+                .validate(),
+            Err(Error::Param(m)) if m.contains("control characters")
+        ));
+        assert!(
+            FormPaymentRequest::new("O", "P", money())
+                .sitename("shop\u{0}")
+                .validate()
+                .is_err()
+        );
         let too_long_name = "n".repeat(crate::limits::MAX_NAME_BYTES + 1);
         assert!(matches!(
             PaymentRequest::new(PayType::Alipay, "O", too_long_name, money())

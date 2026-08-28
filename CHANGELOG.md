@@ -86,7 +86,11 @@ the unpublished 0.1 line.
 - `RawNotifyParams` / `RawNotifyEntry` / `NotifyFixture` mask `key` and
   `sign` in `Debug`, so a logged notification cannot be replayed from logs.
 - `PaymentRequest` / `FormPaymentRequest` / `PaymentResponse` mask callback
-  and payment-link query strings in `Debug`; `param` shows its length only.
+  and payment-link query strings in `Debug` (unparseable URLs show their
+  length only); `param` and `qr_code` show their length, `extra` its keys.
+- Every outbound request is size-checked in the client's GET/POST paths;
+  `name` / `sitename` reject control characters; `mapi.php` success
+  responses require a well-formed `trade_no`.
 - `VerifiedNotify` logs rejections at `debug` instead of `warn` (public
   endpoint); extract `Result<VerifiedNotify, NotifyRejection>` to observe
   them.
