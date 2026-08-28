@@ -1,0 +1,1 @@
+{"code":1,"msg":"succ","trade_no":"2026082800000000001","out_trade_no":"LIVEFORM0000000000000000000001","api_trade_no":"4500000000000000000000000001","bill_trade_no":null,"type":"wxpay","pid":"1001","addtime":"2026-08-28 15:43:42","endtime":"2026-08-28 15:44:10","name":"epay-sdk Rust 真实联调","money":"0.01","status":"1","param":null,"buyer":null}

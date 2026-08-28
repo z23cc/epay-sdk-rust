@@ -3,10 +3,12 @@
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
+use axum::extract::{Path, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Html;
 use epay_sdk::axum::{
-    NotifyAck, NotifyParams, NotifyRejection, VerifiedNotify, VerifiedReturn, callback_route,
+    NotifyAck, NotifyParams, NotifyRejection, ParsedNotify, VerifiedNotify, VerifiedReturn,
+    callback_route,
 };
 use epay_sdk::{Money, Params, ProtocolContext, Signer};
 use tower::ServiceExt;
@@ -57,6 +59,19 @@ async fn observed(result: Result<VerifiedNotify, NotifyRejection>) -> String {
     }
 }
 
+/// Multi-merchant routing: the account comes from the path, never from the
+/// unverified `pid` in the payload.
+async fn multi(
+    State(protocol): State<ProtocolContext>,
+    Path(account): Path<String>,
+    ParsedNotify(params): ParsedNotify,
+) -> NotifyAck {
+    if account != "acct-1" {
+        return NotifyAck::fail();
+    }
+    protocol.verify_notify(&params).map(|_| ()).into()
+}
+
 async fn raw(NotifyParams(params): NotifyParams) -> String {
     params.get("out_trade_no").unwrap_or("-").to_owned()
 }
@@ -73,6 +88,7 @@ fn app() -> Router {
         .route("/notify", callback_route(notify))
         .route("/raw", callback_route(raw))
         .route("/observed", callback_route(observed))
+        .route("/multi/{account}/notify", callback_route(multi))
         .route("/return", callback_route(return_page))
         .with_state(protocol())
 }
@@ -176,6 +192,23 @@ async fn rejection_can_be_observed_by_the_handler() {
     let (status, body) = send(get_request("/observed", "pid=1001&sign=bad")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.starts_with("fail:"), "{body}");
+}
+
+#[tokio::test]
+async fn parsed_notify_supports_multi_merchant_routing() {
+    let good = signed_query("1001", "TRADE_SUCCESS", "9.90");
+    assert_eq!(
+        send(get_request("/multi/acct-1/notify", &good)).await.1,
+        "success"
+    );
+    assert_eq!(
+        send(get_request("/multi/acct-2/notify", &good)).await.1,
+        "fail"
+    );
+
+    let (status, body) = send(get_request("/multi/acct-1/notify", "name=%ZZ")).await;
+    assert_eq!(status, StatusCode::OK, "malformed input still answers 200");
+    assert_eq!(body, "fail");
 }
 
 #[tokio::test]

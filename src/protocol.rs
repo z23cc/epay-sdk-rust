@@ -6,7 +6,7 @@ use crate::config::{Config, ConfigParts, env};
 use crate::error::Result;
 use crate::notify::{NotifyData, verify_notify};
 use crate::params::Params;
-use crate::payment::{FormPaymentRequest, auto_submit_form};
+use crate::payment::{FormPaymentRequest, PreparedForm};
 use crate::signer::Signer;
 use crate::types::path;
 use crate::validation::validate_request_size;
@@ -83,19 +83,24 @@ impl ProtocolContext {
         verify_notify(&self.inner.signer, self.inner.config.pid(), params)
     }
 
-    /// Signed `submit.php` URL for a browser redirect.
-    pub fn build_form_payment_url(&self, req: &FormPaymentRequest) -> Result<String> {
-        let signed = self.form_params(req)?;
-        let mut endpoint = self.inner.config.endpoint(path::SUBMIT)?;
-        endpoint.set_query(Some(&signed.encode()));
-        Ok(endpoint.into())
+    /// Signed `submit.php` parts for custom rendering (CSP-friendly).
+    pub fn prepare_form_payment(&self, req: &FormPaymentRequest) -> Result<PreparedForm> {
+        Ok(PreparedForm {
+            action: self.inner.config.endpoint(path::SUBMIT)?,
+            params: self.form_params(req)?,
+        })
     }
 
-    /// Self-submitting HTML form that posts to `submit.php`.
+    /// Signed `submit.php` URL for a browser redirect.
+    pub fn build_form_payment_url(&self, req: &FormPaymentRequest) -> Result<String> {
+        Ok(self.prepare_form_payment(req)?.redirect_url().into())
+    }
+
+    /// Complete HTML page that posts to `submit.php` via an inline script.
+    /// Under a strict Content-Security-Policy use
+    /// [`ProtocolContext::prepare_form_payment`] instead.
     pub fn build_form_payment(&self, req: &FormPaymentRequest) -> Result<String> {
-        let signed = self.form_params(req)?;
-        let endpoint = self.inner.config.endpoint(path::SUBMIT)?;
-        Ok(auto_submit_form(endpoint.as_str(), &signed))
+        Ok(self.prepare_form_payment(req)?.auto_submit_html())
     }
 
     pub(crate) fn base_params(&self) -> Params {
@@ -256,6 +261,23 @@ mod tests {
             )
             .unwrap();
         assert!(html.contains("https://pay.example.com/epay/submit.php"));
+
+        let prepared = context
+            .prepare_form_payment(
+                &FormPaymentRequest::new(
+                    "ORDER001",
+                    "Product",
+                    Money::from_yuan_str("1.00").unwrap(),
+                )
+                .pay_type(PayType::Alipay),
+            )
+            .unwrap();
+        assert_eq!(
+            prepared.action.as_str(),
+            "https://pay.example.com/epay/submit.php"
+        );
+        assert!(context.verify(&prepared.params, prepared.params.get("sign").unwrap()));
+        assert_eq!(prepared.auto_submit_html(), html);
     }
 
     #[test]

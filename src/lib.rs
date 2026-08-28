@@ -71,7 +71,7 @@ mod validation;
 pub use client::{CallOptions, Client, ClientBuilder};
 pub use config::{Config, HttpConfig, RetryPolicy};
 pub use endpoint::Endpoint;
-pub use error::{Error, Result, TransportErrorKind};
+pub use error::{Error, ErrorKind, Result, TransportErrorKind};
 pub use merchant::{MerchantInfo, Settlement, SettlementListResponse};
 pub use money::Money;
 pub use notify::{
@@ -80,7 +80,9 @@ pub use notify::{
 };
 pub use order::{OrderDetail, OrderListResponse, OrderQueryRequest, generate_out_trade_no};
 pub use params::Params;
-pub use payment::{FormPaymentRequest, PaymentRequest, PaymentResponse};
+pub use payment::{
+    FormPaymentRequest, PaymentDestination, PaymentRequest, PaymentResponse, PreparedForm,
+};
 pub use protocol::{ProtocolContext, ProtocolContextBuilder};
 pub use refund::{RefundRequest, RefundResponse};
 pub use signer::Signer;
@@ -115,5 +117,5 @@ pub mod prelude {
     };
 
     #[cfg(feature = "axum")]
-    pub use crate::axum::{NotifyAck, VerifiedNotify, VerifiedReturn};
+    pub use crate::axum::{NotifyAck, ParsedNotify, VerifiedNotify, VerifiedReturn};
 }

@@ -15,7 +15,8 @@ use crate::serde_util::{default_on_null, flex_i32, flex_u64};
 ///
 /// The gateway echoes the merchant `key` in this response; [`crate::Client`]
 /// strips it, and `Debug` masks any `key` / `sign` left in
-/// [`MerchantInfo::extra`] when the struct is deserialized directly.
+/// [`MerchantInfo::extra`] when the struct is deserialized directly. The
+/// settlement `account` is shown as a length only.
 #[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct MerchantInfo {
@@ -62,7 +63,7 @@ impl std::fmt::Debug for MerchantInfo {
             .field("active", &self.active)
             .field("money", &self.money)
             .field("settle_type", &self.settle_type)
-            .field("account", &self.account)
+            .field("account", &format_args!("<{} bytes>", self.account.len()))
             .field("username", &self.username)
             .field("extra", &extra)
             .finish()
@@ -99,8 +100,9 @@ impl MerchantInfo {
     }
 }
 
-/// Settlement record from `act=settle`.
-#[derive(Clone, Debug, Deserialize)]
+/// Settlement record from `act=settle`. `Debug` shows the destination
+/// `account` as a length only.
+#[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Settlement {
     /// Settlement id.
@@ -125,6 +127,21 @@ pub struct Settlement {
     /// Unmodelled members of the settlement row.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl std::fmt::Debug for Settlement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let extra_keys: Vec<&str> = self.extra.keys().map(String::as_str).collect();
+        f.debug_struct("Settlement")
+            .field("id", &self.id)
+            .field("uid", &self.uid)
+            .field("money", &self.money)
+            .field("account", &format_args!("<{} bytes>", self.account.len()))
+            .field("status", &self.status)
+            .field("add_time", &self.add_time)
+            .field("extra_keys", &extra_keys)
+            .finish()
+    }
 }
 
 /// Settlement list from `act=settle`.
@@ -215,6 +232,12 @@ mod tests {
         assert_eq!(list.settlements.len(), 1);
         assert_eq!(list.settlements[0].account, "");
         assert!(list.validate_success(1001).is_ok());
+
+        let pii: SettlementListResponse = serde_json::from_str(
+            r#"{"code":1,"count":1,"data":[{"id":1,"uid":1001,"money":"1.00","account":"6222000011112222"}]}"#,
+        )
+        .unwrap();
+        assert!(!format!("{pii:?}").contains("6222000011112222"));
         assert!(list.validate_success(2002).is_err());
 
         let empty: SettlementListResponse =

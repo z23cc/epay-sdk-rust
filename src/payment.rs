@@ -6,12 +6,13 @@ use std::net::IpAddr;
 
 use serde::Deserialize;
 use serde_json::Value;
+use url::Url;
 
 use crate::config::Config;
 use crate::endpoint::Endpoint;
 use crate::error::{Error, Result};
 use crate::money::Money;
-use crate::params::redact_url_query;
+use crate::params::{Params, redact_url_query};
 use crate::serde_util::default_on_null;
 use crate::types::{Device, PayType};
 use crate::validation::{
@@ -358,6 +359,54 @@ pub struct PaymentResponse {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// One way to send the payer to the gateway, taken from [`PaymentResponse`].
+///
+/// The SDK does not allow-list schemes or hosts: before redirecting a browser
+/// to a [`PaymentDestination::PayUrl`] or handing an
+/// [`PaymentDestination::UrlScheme`] to an app, apply your own policy (e.g.
+/// HTTPS only, known `alipays://` / `weixin://` schemes). `Debug` masks query
+/// strings.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PaymentDestination<'a> {
+    /// Cashier / redirect URL (`payurl`).
+    PayUrl(&'a str),
+    /// QR-code payload (`qrcode`); usually a URL, not guaranteed.
+    QrCode(&'a str),
+    /// App URL scheme (`urlscheme`).
+    UrlScheme(&'a str),
+}
+
+impl PaymentDestination<'_> {
+    /// Raw wire value.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::PayUrl(value) | Self::QrCode(value) | Self::UrlScheme(value) => value,
+        }
+    }
+
+    /// Parse the value as a URL so scheme and host can be checked.
+    pub fn parse_url(&self) -> Result<Url> {
+        Url::parse(self.as_str()).map_err(|_| {
+            Error::invalid_response_message(
+                Endpoint::CreatePayment,
+                "payment destination is not a valid URL",
+            )
+        })
+    }
+}
+
+impl fmt::Debug for PaymentDestination<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (name, value) = match self {
+            Self::PayUrl(value) => ("PayUrl", *value),
+            Self::QrCode(value) => ("QrCode", *value),
+            Self::UrlScheme(value) => ("UrlScheme", *value),
+        };
+        f.debug_tuple(name).field(&redact_url_query(value)).finish()
+    }
+}
+
 impl fmt::Debug for PaymentResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let extra_keys: Vec<&str> = self.extra.keys().map(String::as_str).collect();
@@ -372,6 +421,27 @@ impl fmt::Debug for PaymentResponse {
 }
 
 impl PaymentResponse {
+    /// All non-empty destinations in the order `pay_url`, `qr_code`,
+    /// `url_scheme`.
+    pub fn destinations(&self) -> Vec<PaymentDestination<'_>> {
+        let mut out = Vec::with_capacity(3);
+        if !self.pay_url.is_empty() {
+            out.push(PaymentDestination::PayUrl(&self.pay_url));
+        }
+        if !self.qr_code.is_empty() {
+            out.push(PaymentDestination::QrCode(&self.qr_code));
+        }
+        if !self.url_scheme.is_empty() {
+            out.push(PaymentDestination::UrlScheme(&self.url_scheme));
+        }
+        out
+    }
+
+    /// First available destination (see [`PaymentResponse::destinations`]).
+    pub fn destination(&self) -> Option<PaymentDestination<'_>> {
+        self.destinations().into_iter().next()
+    }
+
     pub(crate) fn validate_success(&self) -> Result<()> {
         validate_trade_no(&self.trade_no).map_err(|_| {
             Error::invalid_response_message(
@@ -392,6 +462,67 @@ impl PaymentResponse {
     }
 }
 
+/// A signed `submit.php` payload for the application to render.
+///
+/// [`crate::ProtocolContext::build_form_payment`] wraps this in a page with
+/// an inline `<script>` that submits automatically, which a strict CSP
+/// blocks. With `PreparedForm` you can render the inputs yourself and submit
+/// via a nonce'd script, an external script or a plain button. `Debug`
+/// masks the signature.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct PreparedForm {
+    /// `submit.php` endpoint to POST to (or redirect to with
+    /// [`PreparedForm::redirect_url`]).
+    pub action: Url,
+    /// Signed parameters, including `sign` and `sign_type`.
+    pub params: Params,
+}
+
+impl PreparedForm {
+    /// HTML-escaped `<input type="hidden">` elements for every parameter.
+    pub fn hidden_inputs(&self) -> String {
+        let mut fields = String::new();
+        for (key, value) in self.params.iter() {
+            fields.push_str(&format!(
+                r#"<input type="hidden" name="{}" value="{}">"#,
+                html_escape(key),
+                html_escape(value)
+            ));
+        }
+        fields
+    }
+
+    /// `action` with the signed parameters as its query string, for a GET
+    /// redirect.
+    pub fn redirect_url(&self) -> Url {
+        let mut url = self.action.clone();
+        url.set_query(Some(&self.params.encode()));
+        url
+    }
+
+    /// Complete page that submits itself with an inline script.
+    pub fn auto_submit_html(&self) -> String {
+        format!(
+            r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>正在跳转到支付页面...</title>
+</head>
+<body>
+    <form id="payForm" method="POST" action="{action}">
+        {fields}
+    </form>
+    <script>document.getElementById('payForm').submit();</script>
+</body>
+</html>"#,
+            action = html_escape(self.action.as_str()),
+            fields = self.hidden_inputs()
+        )
+    }
+}
+
 pub(crate) fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -405,34 +536,6 @@ pub(crate) fn html_escape(s: &str) -> String {
         }
     }
     out
-}
-
-pub(crate) fn auto_submit_form(action: &str, params: &crate::params::Params) -> String {
-    let mut fields = String::new();
-    for (k, v) in params.iter() {
-        fields.push_str(&format!(
-            r#"<input type="hidden" name="{}" value="{}">"#,
-            html_escape(k),
-            html_escape(v)
-        ));
-    }
-    format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>正在跳转到支付页面...</title>
-</head>
-<body>
-    <form id="payForm" method="POST" action="{action}">
-        {fields}
-    </form>
-    <script>document.getElementById('payForm').submit();</script>
-</body>
-</html>"#,
-        action = html_escape(action),
-        fields = fields
-    )
 }
 
 #[cfg(test)]
@@ -561,6 +664,53 @@ mod tests {
         let unvalidated = PaymentRequest::new(PayType::Alipay, "O", "P", money())
             .notify_url("not a url?token=secret");
         assert!(!format!("{unvalidated:?}").contains("secret"));
+    }
+
+    #[test]
+    fn destinations_follow_wire_order_and_parse() {
+        let response: PaymentResponse = serde_json::from_str(
+            r#"{"trade_no":"T1","qrcode":"weixin://wxpay/bizpayurl?pr=abc","urlscheme":"alipays://x?y=1"}"#,
+        )
+        .unwrap();
+        let all = response.destinations();
+        assert_eq!(all.len(), 2);
+        assert!(matches!(all[0], PaymentDestination::QrCode(_)));
+        assert!(matches!(all[1], PaymentDestination::UrlScheme(_)));
+        let first = response.destination().unwrap();
+        assert_eq!(first.parse_url().unwrap().scheme(), "weixin");
+        assert!(!format!("{first:?}").contains("pr=abc"));
+
+        let empty: PaymentResponse = serde_json::from_str(r#"{"trade_no":"T1"}"#).unwrap();
+        assert!(empty.destination().is_none());
+        assert!(PaymentDestination::QrCode("not a url").parse_url().is_err());
+    }
+
+    #[test]
+    fn prepared_form_renders_inputs_redirect_and_page() {
+        let mut params = Params::new();
+        params.insert("pid", "1001");
+        params.insert("name", "A&B <x>");
+        params.insert("sign", "deadbeef");
+        let form = PreparedForm {
+            action: Url::parse("https://pay.example.com/submit.php").unwrap(),
+            params,
+        };
+        let inputs = form.hidden_inputs();
+        assert!(
+            inputs.contains(r#"name="name" value="A&amp;B &lt;x&gt;""#),
+            "{inputs}"
+        );
+        assert!(!inputs.contains("<script"));
+        assert_eq!(
+            form.redirect_url().as_str(),
+            "https://pay.example.com/submit.php?name=A%26B+%3Cx%3E&pid=1001&sign=deadbeef"
+        );
+        let page = form.auto_submit_html();
+        assert!(page.contains("payForm") && page.contains(&inputs));
+        assert!(
+            !format!("{form:?}").contains("deadbeef"),
+            "sign is redacted"
+        );
     }
 
     #[test]

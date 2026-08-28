@@ -83,11 +83,14 @@ mod reqwest_impl {
     }
 
     impl ReqwestTransport {
-        pub fn new(timeout: Duration) -> Result<Self> {
-            let builder = reqwest::Client::builder()
+        pub fn new(timeout: Duration, connect_timeout: Option<Duration>) -> Result<Self> {
+            let mut builder = reqwest::Client::builder()
                 .timeout(timeout)
                 .redirect(reqwest::redirect::Policy::none())
                 .user_agent(concat!("epay-sdk-rust/", env!("CARGO_PKG_VERSION")));
+            if let Some(connect_timeout) = connect_timeout {
+                builder = builder.connect_timeout(connect_timeout);
+            }
             #[cfg(feature = "reqwest-rustls")]
             let builder = builder.use_rustls_tls();
             #[cfg(all(feature = "reqwest-native-tls", not(feature = "reqwest-rustls")))]

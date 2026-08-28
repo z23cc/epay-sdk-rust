@@ -61,8 +61,9 @@ impl OrderQueryRequest {
 /// strings. Successful single-order queries are additionally checked to
 /// match the requested identifier and the configured PID. Anything the
 /// gateway returns beyond the modelled columns is kept in
-/// [`OrderDetail::extra`].
-#[derive(Clone, Debug, Deserialize)]
+/// [`OrderDetail::extra`]. `Debug` shows `buyer` and `param` (possibly
+/// personal data) as lengths and `extra` as its keys.
+#[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct OrderDetail {
     /// EPay order number.
@@ -108,6 +109,27 @@ pub struct OrderDetail {
     /// envelope `code`; `msg` may be present.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl std::fmt::Debug for OrderDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let extra_keys: Vec<&str> = self.extra.keys().map(String::as_str).collect();
+        f.debug_struct("OrderDetail")
+            .field("trade_no", &self.trade_no)
+            .field("out_trade_no", &self.out_trade_no)
+            .field("api_trade_no", &self.api_trade_no)
+            .field("pay_type", &self.pay_type)
+            .field("pid", &self.pid)
+            .field("add_time", &self.add_time)
+            .field("end_time", &self.end_time)
+            .field("name", &self.name)
+            .field("money", &self.money)
+            .field("status", &self.status)
+            .field("param", &format_args!("<{} bytes>", self.param.len()))
+            .field("buyer", &format_args!("<{} bytes>", self.buyer.len()))
+            .field("extra_keys", &extra_keys)
+            .finish()
+    }
 }
 
 impl OrderDetail {
@@ -261,6 +283,17 @@ mod tests {
         assert!(order.is_paid());
         assert!(order.extra["bill_trade_no"].is_null());
         assert!(!order.extra.contains_key("addtime"), "aliases are modelled");
+
+        let with_pii: OrderDetail = serde_json::from_str(
+            r#"{"trade_no":"T1","out_trade_no":"O1","buyer":"someone@example.com","param":"uid=7","fork":"x"}"#,
+        )
+        .unwrap();
+        let debug = format!("{with_pii:?}");
+        assert!(
+            !debug.contains("example.com") && !debug.contains("uid=7"),
+            "{debug}"
+        );
+        assert!(debug.contains("fork") && debug.contains("O1"), "{debug}");
         assert_eq!(order.amount().unwrap().to_epay_string(), "0.01");
         assert!(
             order

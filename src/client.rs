@@ -14,7 +14,7 @@ use crate::notify::NotifyData;
 use crate::observe::instrument;
 use crate::order::{OrderDetail, OrderListResponse, OrderQueryRequest};
 use crate::params::Params;
-use crate::payment::{FormPaymentRequest, PaymentRequest, PaymentResponse};
+use crate::payment::{FormPaymentRequest, PaymentRequest, PaymentResponse, PreparedForm};
 use crate::protocol::{ProtocolContext, ProtocolContextBuilder};
 use crate::refund::{RefundRequest, RefundResponse};
 use crate::signer::Signer;
@@ -27,7 +27,7 @@ use crate::validation::validate_encoded_size;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CallOptions {
-    /// Whole-request timeout for this call.
+    /// Per-attempt timeout for this call (each retry gets it again).
     pub timeout: Option<Duration>,
     /// Retry policy for this call (GET endpoints only).
     pub retry: Option<RetryPolicy>,
@@ -39,7 +39,7 @@ impl CallOptions {
         Self::default()
     }
 
-    /// Override the request timeout.
+    /// Override the per-attempt timeout.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -158,6 +158,12 @@ impl Client {
     /// Self-submitting form. See [`ProtocolContext::build_form_payment`].
     pub fn build_form_payment(&self, request: &FormPaymentRequest) -> Result<String> {
         self.inner.protocol.build_form_payment(request)
+    }
+
+    /// Signed form parts for custom rendering. See
+    /// [`ProtocolContext::prepare_form_payment`].
+    pub fn prepare_form_payment(&self, request: &FormPaymentRequest) -> Result<PreparedForm> {
+        self.inner.protocol.prepare_form_payment(request)
     }
 
     /// Create an API payment (`POST mapi.php`). Never retried.
@@ -535,6 +541,7 @@ fn response_code(endpoint: Endpoint, value: &serde_json::Value) -> Result<i32> {
 pub struct ClientBuilder {
     protocol: ProtocolContextBuilder,
     timeout: Duration,
+    connect_timeout: Option<Duration>,
     max_response_body_bytes: usize,
     retry: RetryPolicy,
     transport: Option<Box<dyn Transport>>,
@@ -547,6 +554,7 @@ impl std::fmt::Debug for ClientBuilder {
         f.debug_struct("ClientBuilder")
             .field("protocol", &self.protocol)
             .field("timeout", &self.timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .field("max_response_body_bytes", &self.max_response_body_bytes)
             .field("retry", &self.retry)
             .field("custom_transport", &self.transport.is_some())
@@ -565,6 +573,7 @@ impl ClientBuilder {
         Self {
             protocol,
             timeout: HttpConfig::DEFAULT_TIMEOUT,
+            connect_timeout: None,
             max_response_body_bytes: HttpConfig::DEFAULT_MAX_RESPONSE_BODY_BYTES,
             retry: RetryPolicy::NONE,
             transport: None,
@@ -580,7 +589,8 @@ impl ClientBuilder {
     ///
     /// | Variable | Meaning |
     /// |---|---|
-    /// | `EPAY_TIMEOUT_SECS` | request timeout in seconds |
+    /// | `EPAY_TIMEOUT_SECS` | per-attempt request timeout in seconds |
+    /// | `EPAY_CONNECT_TIMEOUT_SECS` | TCP/TLS connect timeout in seconds |
     /// | `EPAY_MAX_RESPONSE_BYTES` | response body limit |
     /// | `EPAY_MAX_RETRIES` | retries for GET endpoints (default `0`) |
     pub fn from_env() -> Result<Self> {
@@ -596,6 +606,14 @@ impl ClientBuilder {
                 .parse::<u64>()
                 .map_err(|_| Error::Config(TIMEOUT))?;
             builder = builder.timeout(Duration::from_secs(seconds));
+        }
+        const CONNECT: &str = "EPAY_CONNECT_TIMEOUT_SECS must be a positive integer";
+        if let Some(value) = env::typed(lookup, "EPAY_CONNECT_TIMEOUT_SECS", CONNECT)? {
+            let seconds = value
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| Error::Config(CONNECT))?;
+            builder = builder.connect_timeout(Duration::from_secs(seconds));
         }
         const MAX_BYTES: &str = "EPAY_MAX_RESPONSE_BYTES must be a positive integer";
         if let Some(value) = env::typed(lookup, "EPAY_MAX_RESPONSE_BYTES", MAX_BYTES)? {
@@ -616,9 +634,16 @@ impl ClientBuilder {
         Ok(builder)
     }
 
-    /// Whole-request timeout for the built-in transport.
+    /// Per-attempt request timeout for the built-in transport.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// TCP/TLS connect timeout for the built-in transport (default: none
+    /// beyond the per-attempt timeout).
+    pub fn connect_timeout(mut self, connect_timeout: Duration) -> Self {
+        self.connect_timeout = Some(connect_timeout);
         self
     }
 
@@ -683,8 +708,9 @@ impl ClientBuilder {
 
     /// Validate settings and build the client.
     pub fn build(self) -> Result<Client> {
-        let http =
-            HttpConfig::new(self.timeout, self.max_response_body_bytes)?.with_retry(self.retry);
+        let http = HttpConfig::new(self.timeout, self.max_response_body_bytes)?
+            .with_retry(self.retry)
+            .with_connect_timeout(self.connect_timeout);
         let protocol = self.protocol.build()?;
         let transport = if let Some(transport) = self.transport {
             transport
@@ -694,7 +720,7 @@ impl ClientBuilder {
                 let transport = if let Some(client) = self.reqwest_client {
                     crate::transport::ReqwestTransport::from_client(client)
                 } else {
-                    crate::transport::ReqwestTransport::new(http.timeout())?
+                    crate::transport::ReqwestTransport::new(http.timeout(), http.connect_timeout())?
                 };
                 Box::new(transport)
             }
@@ -1213,6 +1239,7 @@ mod tests {
             ("EPAY_KEY", "k"),
             ("EPAY_API_URL", "https://pay.example.com"),
             ("EPAY_TIMEOUT_SECS", "5"),
+            ("EPAY_CONNECT_TIMEOUT_SECS", "2"),
             ("EPAY_MAX_RESPONSE_BYTES", "4096"),
             ("EPAY_MAX_RETRIES", "3"),
         ]
@@ -1228,6 +1255,10 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(client.http_config().timeout(), Duration::from_secs(5));
+        assert_eq!(
+            client.http_config().connect_timeout(),
+            Some(Duration::from_secs(2))
+        );
         assert_eq!(client.http_config().max_response_body_bytes(), 4096);
         assert_eq!(client.http_config().retry().max_retries(), 3);
 

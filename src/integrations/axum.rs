@@ -176,10 +176,64 @@ where
     }
 }
 
-/// Strictly parsed but **unverified** canonical parameter bag.
+/// Strictly parsed but **unverified** parameters whose rejection is
+/// `200 fail`, for multi-merchant callback routing.
 ///
-/// Useful for logging or for calling [`ProtocolContext::verify_notify`]
-/// manually; prefer [`VerifiedNotify`] for `notify_url` handlers.
+/// Use it when one service handles callbacks for several EPay accounts:
+/// identify the account from the **path** (never from the unverified `pid`
+/// in the payload), load that account's [`ProtocolContext`], then call
+/// [`ProtocolContext::verify_notify`].
+///
+/// ```rust,no_run
+/// use axum::extract::{Path, State};
+/// use epay_sdk::axum::{NotifyAck, ParsedNotify};
+/// use epay_sdk::ProtocolContext;
+///
+/// # #[derive(Clone)] struct Accounts;
+/// # impl Accounts { fn protocol_for(&self, _id: &str) -> Option<ProtocolContext> { None } }
+/// async fn notify(
+///     State(accounts): State<Accounts>,
+///     Path(account_id): Path<String>,
+///     ParsedNotify(params): ParsedNotify,
+/// ) -> NotifyAck {
+///     let Some(epay) = accounts.protocol_for(&account_id) else {
+///         return NotifyAck::fail();
+///     };
+///     match epay.verify_notify(&params).and_then(|data| data.try_into_success()) {
+///         Ok(paid) => {
+///             // idempotent state transition keyed on paid.data().out_trade_no
+///             let _ = paid;
+///             NotifyAck::ok()
+///         }
+///         Err(_) => NotifyAck::fail(),
+///     }
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct ParsedNotify(pub Params);
+
+impl<S> FromRequest<S> for ParsedNotify
+where
+    S: Send + Sync,
+{
+    type Rejection = NotifyRejection;
+
+    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        read_notify_params(request)
+            .await
+            .map(ParsedNotify)
+            .map_err(|error| {
+                sdk_debug!("[epay-sdk] notify input rejected: {error}");
+                NotifyRejection(error)
+            })
+    }
+}
+
+/// Strictly parsed but **unverified** canonical parameter bag whose
+/// rejection is HTTP 400.
+///
+/// Useful for diagnostics endpoints; for gateway callbacks prefer
+/// [`VerifiedNotify`] or, for multi-merchant routing, [`ParsedNotify`].
 #[derive(Clone, Debug)]
 pub struct NotifyParams(pub Params);
 

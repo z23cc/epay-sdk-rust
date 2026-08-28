@@ -139,8 +139,9 @@ impl RawNotifyParams {
 /// Authenticated and structurally valid asynchronous/return notification.
 ///
 /// Authenticity does not imply freshness: see the module docs on replay
-/// protection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// protection. `Debug` shows `param` (opaque merchant data, possibly
+/// personal) as a length only.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NotifyData {
     /// Merchant id; already checked against the configured PID.
@@ -159,6 +160,21 @@ pub struct NotifyData {
     pub trade_status: TradeStatus,
     /// Opaque merchant data from the original request (may be empty).
     pub param: String,
+}
+
+impl std::fmt::Debug for NotifyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifyData")
+            .field("pid", &self.pid)
+            .field("trade_no", &self.trade_no)
+            .field("out_trade_no", &self.out_trade_no)
+            .field("pay_type", &self.pay_type)
+            .field("name", &self.name)
+            .field("money", &self.money)
+            .field("trade_status", &self.trade_status)
+            .field("param", &format_args!("<{} bytes>", self.param.len()))
+            .finish()
+    }
 }
 
 impl NotifyData {
@@ -399,8 +415,17 @@ mod tests {
     #[test]
     fn verifies_complete_notify() {
         let signer = Signer::new("testkey123").unwrap();
-        let data = verify_notify(&signer, 1001, &signed_notify(&signer)).unwrap();
+        let mut params = signed_notify(&signer);
+        params.remove("sign");
+        params.remove("sign_type");
+        params.insert("param", "phone=13800000000");
+        let params = signer.sign_with_params(params);
+        let data = verify_notify(&signer, 1001, &params).unwrap();
         assert!(data.is_success());
+        assert_eq!(data.param, "phone=13800000000");
+        let debug = format!("{data:?}");
+        assert!(!debug.contains("13800000000"), "{debug}");
+        assert!(debug.contains("ORDER001"), "{debug}");
         assert!(data.money_matches(Money::from_yuan_str("10.00").unwrap()));
         assert!(data.try_into_success().is_ok());
     }

@@ -138,7 +138,7 @@ if order.is_paid() {
 
 ## 进阶
 
-[docs/GUIDE.md](docs/GUIDE.md) 覆盖：只用 `ProtocolContext` 的无 HTTP 服务、重试与单次调用选项、分页、`extra` 字段、错误分类与 HTTP 响应映射、`blocking` / `tracing` feature、自定义 `Transport`、环境变量、用 `NotifyFixture` 测试回调、0.1 → 0.2 迁移。
+[docs/GUIDE.md](docs/GUIDE.md) 覆盖：只用 `ProtocolContext` 的无 HTTP 服务、CSP 友好的 `PreparedForm`、支付目标地址、重试与单次调用选项（per-attempt 超时）、分页、`extra` 字段、`ErrorKind` 与 HTTP 响应映射、多商户回调（`ParsedNotify`）、`blocking` / `tracing` feature、自定义 `Transport`、环境变量、用 `NotifyFixture` 测试回调、0.1 → 0.2 迁移。
 
 ## 验证
 

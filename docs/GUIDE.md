@@ -7,6 +7,8 @@ README 只讲 Axum 的最短路径；这里是其余细节。所有代码片段�
 - [架构](#架构)
 - [Features](#features)
 - [无 HTTP 的协议上下文](#无-http-的协议上下文)
+- [CSP 友好的表单支付](#csp-友好的表单支付)
+- [支付目标地址](#支付目标地址)
 - [分支特有字段](#分支特有字段)
 - [重试与单次调用选项](#重试与单次调用选项)
 - [分页](#分页)
@@ -15,6 +17,7 @@ README 只讲 Axum 的最短路径；这里是其余细节。所有代码片段�
 - [可观测性](#可观测性)
 - [旧 HTTP 网关](#旧-http-网关)
 - [其它 Web 框架](#其它-web-框架)
+- [多商户回调](#多商户回调)
 - [观察被拒绝的回调](#观察被拒绝的回调)
 - [出站字段上限](#出站字段上限)
 - [金额](#金额)
@@ -51,7 +54,7 @@ test-util feature → MockTransport、NotifyFixture
 ```
 
 - 网关响应先校验 `code` / `msg` 包络，再解析成功结构；成功结构不携带 `code`（退款回执保留 `msg`）。
-- 请求 / 响应类型的 `Debug` 掩盖回调与支付链接的 query（无法解析的 URL 只显示长度），`param` / `qr_code` 只显示长度，`extra` 只显示键。
+- 请求 / 响应类型的 `Debug` 掩盖回调与支付链接的 query（无法解析的 URL 只显示长度）；`param` / `qr_code` / `buyer` / 结算 `account` 只显示长度，`extra` 只显示键。
 - `api.php` 只使用官方 `pid + key` 鉴权。
 - 通知 query + form 合计最多 16 KiB，重复字段和冲突字段直接拒绝。
 
@@ -89,6 +92,51 @@ let url = epay.build_form_payment_url(&request)?;
 
 `Client` 上的同名方法只是转发到 `client.protocol_context()`。
 
+## CSP 友好的表单支付
+
+`build_form_payment()` 返回的页面带内联 `<script>`，严格的 Content-Security-Policy 会拦截。`prepare_form_payment()` 只给你签名后的部件，渲染方式自定：
+
+```rust
+# fn demo(epay: &epay_sdk::ProtocolContext, request: &epay_sdk::FormPaymentRequest) -> epay_sdk::Result<()> {
+let form = epay.prepare_form_payment(request)?;
+// 方式一：自己的模板 + nonce 脚本 / 提交按钮
+ let html = format!(
+    r#"<form id="pay" method="POST" action="{}">{}<button>前往支付</button></form>"#,
+    form.action, form.hidden_inputs()
+);
+// 方式二：GET 重定向
+ let redirect = form.redirect_url();
+# let _ = (html, redirect);
+# Ok(())
+# }
+```
+
+`form.params` 是 `Params`，`Debug` 会脱敏 `sign`。
+
+## 支付目标地址
+
+`mapi.php` 根据渠道 / 设备返回 `payurl`、`qrcode`、`urlscheme` 中的一个或多个。`PaymentResponse::destination()` / `destinations()` 按这个顺序给出非空项，`PaymentDestination::parse_url()` 方便你检查 scheme 和 host：
+
+```rust
+use epay_sdk::PaymentDestination;
+
+# fn demo(response: &epay_sdk::PaymentResponse) -> epay_sdk::Result<()> {
+match response.destination() {
+    Some(PaymentDestination::PayUrl(url)) => {
+        let parsed = PaymentDestination::PayUrl(url).parse_url()?;
+        // 你的策略：只允许 https 和已知网关域名，再重定向浏览器
+        let _ = parsed.scheme() == "https";
+    }
+    Some(PaymentDestination::QrCode(payload)) => { /* 渲染二维码 */ let _ = payload; }
+    Some(PaymentDestination::UrlScheme(scheme)) => { /* 只放行 alipays:// weixin:// 等已知 scheme */ let _ = scheme; }
+    Some(_) | None => {}
+}
+# Ok(())
+# }
+```
+
+SDK 不替你做 allowlist：各分支返回的 scheme 和域名差异很大，安全策略必须由应用决定。
+
 ## 分支特有字段
 
 每个响应结构体都有 `extra: BTreeMap<String, serde_json::Value>`，保留网关返回但 SDK 未建模的字段；包络字段 `code` 已被消费，回显的 `key` / `sign` 被剔除，都不会出现在其中。
@@ -106,6 +154,8 @@ if let Some(fee) = order.extra.get("pay_fee").and_then(|v| v.as_str()) {
 ## 重试与单次调用选项
 
 默认不重试。`RetryPolicy` 只对 **GET** 端点（订单 / 商户 / 结算查询）且只对 `Error::is_retryable()` 为真的失败（超时、连接失败、502/503/504）生效；`mapi.php` 下单和退款永远不自动重试。
+
+**超时是 per-attempt 的**：`timeout` 约束单次尝试，每次重试重新计时，退避延迟不计入；开启 2 次重试后一次 GET 最长可达 `3 × timeout + 退避`。需要总体 deadline 的地方（比如 durable job）保持 `RetryPolicy::NONE`，由外层调度器控制重试。`connect_timeout` 可单独约束 TCP/TLS 建连。
 
 ```rust
 use std::time::Duration;
@@ -156,7 +206,7 @@ fn classify(error: &Error) -> &'static str {
 }
 ```
 
-`Error` 是 `#[non_exhaustive]`；`Error::code()` 提供与 Go SDK 一致的数字码，`Error::transport_kind()` / `is_timeout()` / `is_retryable()` 提供传输层分类。所有错误文本都会对 `key` / `sign` 脱敏；内置 reqwest transport 的错误只包含固定分类消息，不含请求 URL。
+`Error` 是 `#[non_exhaustive]`，业务代码不必匹配它：`Error::kind()` 返回稳定的 `ErrorKind`（`Config` / `InvalidParameter` / `Verification` / `Provider` / `Transport` / `InvalidResponse`），`Error::endpoint()` 给出涉及的网关端点，适合指标标签和 HTTP 状态码映射；`Error::code()` 提供与 Go SDK 一致的数字码，`Error::transport_kind()` / `is_timeout()` / `is_retryable()` 提供传输层分类。所有错误文本都会对 `key` / `sign` 脱敏；内置 reqwest transport 的错误只包含固定分类消息，不含请求 URL。
 
 SDK 有意不为 `Error` 实现 `IntoResponse`：网关错误文案不应该原样送到浏览器。在 Axum 里用一个 newtype 统一映射：
 
@@ -175,10 +225,14 @@ impl From<Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = match &self.0 {
-            Error::Param(_) | Error::Notify { .. } => StatusCode::BAD_REQUEST,
-            Error::Api { .. } => StatusCode::BAD_GATEWAY,
-            Error::Transport { .. } | Error::Http { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        use epay_sdk::ErrorKind;
+        let status = match self.0.kind() {
+            ErrorKind::InvalidParameter => StatusCode::BAD_REQUEST,
+            ErrorKind::Provider => StatusCode::BAD_GATEWAY,
+            ErrorKind::Transport => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorKind::Config | ErrorKind::Verification | ErrorKind::InvalidResponse => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         log::warn!("epay call failed: {}", self.0);
@@ -231,6 +285,37 @@ let data = protocol.verify_notify(&params)?;
 ```
 
 调用方仍需先限制原始 HTTP 输入大小；也可以使用 `parse_raw_notify_params_with_limits`。回调必须同时接受 GET 和 POST。
+
+## 多商户回调
+
+一个服务代理多个易支付账户时，`VerifiedNotify`（绑定单个 `ProtocolContext`）不够用。用 `ParsedNotify`：它只做严格解析不验签，拒绝同样回 `200 fail`；账户从**路径**里来，用它加载对应的 `ProtocolContext` 再验签。绝不要根据未验证的 `pid` 去选密钥——那等于让攻击者指定用哪把钥验他的签名。
+
+```rust
+use axum::extract::{Path, State};
+use epay_sdk::axum::{NotifyAck, ParsedNotify};
+use epay_sdk::ProtocolContext;
+
+# #[derive(Clone)] struct Accounts;
+# impl Accounts { fn protocol_for(&self, _id: &str) -> Option<ProtocolContext> { None } }
+async fn notify(
+    State(accounts): State<Accounts>,
+    Path(account_id): Path<String>,
+    ParsedNotify(params): ParsedNotify,
+) -> NotifyAck {
+    let Some(epay) = accounts.protocol_for(&account_id) else {
+        return NotifyAck::fail();
+    };
+    match epay.verify_notify(&params).and_then(|data| data.try_into_success()) {
+        Ok(paid) => {
+            let _ = paid; // 按 out_trade_no 幂等入账
+            NotifyAck::ok()
+        }
+        Err(_) => NotifyAck::fail(),
+    }
+}
+```
+
+路由：`.route("/notify/{account_id}", callback_route(notify))`。
 
 ## 观察被拒绝的回调
 
@@ -296,12 +381,13 @@ EPAY_RETURN_URL=https://shop.example.com/return
 EPAY_DEBUG=false
 EPAY_ALLOW_INSECURE_HTTP=false           # 允许 http:// 网关（旧部署）
 EPAY_ALLOW_INSECURE_CALLBACK_HTTP=false  # 允许 http:// 回调地址（本地联调）
-EPAY_TIMEOUT_SECS=30             # 仅 Client
+EPAY_TIMEOUT_SECS=30             # 仅 Client，per-attempt
+EPAY_CONNECT_TIMEOUT_SECS=5      # 仅 Client，可选
 EPAY_MAX_RESPONSE_BYTES=1048576  # 仅 Client
 EPAY_MAX_RETRIES=0               # 仅 Client，GET 端点重试次数
 ```
 
-`ProtocolContext::from_env` 读取前八项，`Client::from_env` 额外读取三项 HTTP 设置。非法数字或布尔值会在启动时失败，不会静默回退。
+`ProtocolContext::from_env` 读取前八项，`Client::from_env` 额外读取四项 HTTP 设置。非法数字或布尔值会在启动时失败，不会静默回退。
 
 ## 自定义 HTTP
 
@@ -365,6 +451,8 @@ let query = NotifyFixture::new(1001, "testkey123", "ORDER001", Money::from_yuan_
 ```
 
 网关接口用 `MockTransport` 脚本化响应：`Client::builder(..).transport(MockTransport::new().push_json(r#"{"code":1,...}"#))`；`recorded()` 里的 `query` / `form` 是 `Params`，`Debug` 输出会脱敏 `key` / `sign`，用 `get()` 断言。
+
+仓库自身的回归依赖两类附加测试：`tests/fixtures/*.json` 是脱敏后的真实分支响应（可空列、字符串数字、`data: null`、回显 key、退款 `code: 0` 等），遇到新分支的奇怪响应时把它脱敏后加进去即可；`tests/properties.rs` 用 proptest 对通知解析器、`Params` 编码 / 签名、`Money` 字符串和表单 HTML 转义做随机输入测试。
 
 ## 0.1 → 0.2 迁移
 

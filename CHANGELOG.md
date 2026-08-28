@@ -34,6 +34,16 @@ the unpublished 0.1 line.
 - `Money` implements `Serialize`/`Deserialize` (wire string or integer
   JSON number; fractional JSON numbers are rejected) and
   `Money::try_to_fen()` (errors instead of saturating).
+- `PreparedForm` + `prepare_form_payment()` for CSP-friendly form rendering
+  (`hidden_inputs`, `redirect_url`, `auto_submit_html`).
+- `PaymentDestination` + `PaymentResponse::destination()/destinations()`.
+- `ErrorKind`, `Error::kind()` and `Error::endpoint()` for exhaustive
+  matching and metrics without touching the non-exhaustive `Error`.
+- `ClientBuilder::connect_timeout` / `EPAY_CONNECT_TIMEOUT_SECS`; request
+  timeouts are documented as per-attempt.
+- Axum `ParsedNotify` extractor (parse only, `200 fail` on rejection) for
+  multi-merchant callback routing.
+- Property tests (proptest) and sanitized real-fork response fixtures.
 - `blocking` feature: `blocking::Client` for non-async programs.
 - `tracing` feature: a span per gateway call plus retry/warn events;
   replaces `log` output instead of duplicating it.
@@ -88,6 +98,8 @@ the unpublished 0.1 line.
 - `PaymentRequest` / `FormPaymentRequest` / `PaymentResponse` mask callback
   and payment-link query strings in `Debug` (unparseable URLs show their
   length only); `param` and `qr_code` show their length, `extra` its keys.
+- `NotifyData::param`, `OrderDetail::buyer`/`param`, `Settlement::account`
+  and `MerchantInfo::account` show only their length in `Debug`.
 - Every outbound request is size-checked in the client's GET/POST paths;
   `name` / `sitename` reject control characters; `mapi.php` success
   responses require a well-formed `trade_no`.

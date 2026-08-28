@@ -275,9 +275,14 @@ impl Default for RetryPolicy {
 }
 
 /// HTTP settings used by [`crate::Client`] only.
+///
+/// `timeout` is **per attempt**: with a [`RetryPolicy`] each retry gets the
+/// full timeout again and back-off delays are not counted, so the worst
+/// case for a GET is `(retries + 1) * timeout + total back-off`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpConfig {
     timeout: Duration,
+    connect_timeout: Option<Duration>,
     max_response_body_bytes: usize,
     retry: RetryPolicy,
 }
@@ -301,6 +306,7 @@ impl HttpConfig {
         }
         Ok(Self {
             timeout,
+            connect_timeout: None,
             max_response_body_bytes,
             retry: RetryPolicy::NONE,
         })
@@ -312,9 +318,21 @@ impl HttpConfig {
         self
     }
 
-    /// Whole-request timeout applied by the built-in transport.
+    /// Separate TCP/TLS connect timeout for the built-in transport; `None`
+    /// leaves only the per-attempt timeout.
+    pub fn with_connect_timeout(mut self, connect_timeout: Option<Duration>) -> Self {
+        self.connect_timeout = connect_timeout.filter(|value| !value.is_zero());
+        self
+    }
+
+    /// Per-attempt request timeout applied by the built-in transport.
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    /// Connect timeout for the built-in transport, if set.
+    pub fn connect_timeout(&self) -> Option<Duration> {
+        self.connect_timeout
     }
 
     /// Maximum accepted response body size in bytes.
@@ -332,6 +350,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             timeout: Self::DEFAULT_TIMEOUT,
+            connect_timeout: None,
             max_response_body_bytes: Self::DEFAULT_MAX_RESPONSE_BODY_BYTES,
             retry: RetryPolicy::NONE,
         }
@@ -512,6 +531,14 @@ mod tests {
             HttpConfig::DEFAULT_MAX_RESPONSE_BODY_BYTES
         );
         assert_eq!(http.retry(), &RetryPolicy::NONE);
+        assert_eq!(http.connect_timeout(), None);
+        let http = http.with_connect_timeout(Some(Duration::from_secs(5)));
+        assert_eq!(http.connect_timeout(), Some(Duration::from_secs(5)));
+        assert_eq!(
+            http.with_connect_timeout(Some(Duration::ZERO))
+                .connect_timeout(),
+            None
+        );
     }
 
     #[test]
