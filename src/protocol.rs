@@ -9,6 +9,7 @@ use crate::params::Params;
 use crate::payment::{FormPaymentRequest, auto_submit_form};
 use crate::signer::Signer;
 use crate::types::path;
+use crate::validation::validate_request_size;
 
 /// Transport-free EPay protocol context.
 ///
@@ -117,7 +118,9 @@ impl ProtocolContext {
         );
         params.insert_opt("param", req.param.clone());
         params.insert_opt("sitename", req.sitename.clone());
-        Ok(self.inner.signer.sign_with_params(params))
+        let signed = self.inner.signer.sign_with_params(params);
+        validate_request_size(&signed)?;
+        Ok(signed)
     }
 }
 
@@ -253,6 +256,29 @@ mod tests {
             )
             .unwrap();
         assert!(html.contains("https://pay.example.com/epay/submit.php"));
+    }
+
+    #[test]
+    fn oversized_signed_request_is_rejected() {
+        let context = ProtocolContext::builder(1001, "k", "https://pay.example.com")
+            .notify_url("https://shop.example.com/notify")
+            .build()
+            .unwrap();
+        // Every field within its own limit, but the encoded total exceeds 4 KiB.
+        let request = FormPaymentRequest::new(
+            "ORDER001",
+            "商".repeat(crate::limits::MAX_NAME_BYTES / 3),
+            Money::from_yuan_str("1.00").unwrap(),
+        )
+        .param("参".repeat(crate::limits::MAX_PARAM_BYTES / 3))
+        .return_url(format!(
+            "https://shop.example.com/{}",
+            "路".repeat((crate::limits::MAX_CALLBACK_URL_BYTES - 40) / 3)
+        ));
+        assert!(matches!(
+            context.build_form_payment_url(&request),
+            Err(Error::Param(m)) if m.starts_with("encoded request exceeds")
+        ));
     }
 
     fn lookup(vars: &HashMap<&str, &str>) -> impl Fn(&str) -> Result<String, std::env::VarError> {

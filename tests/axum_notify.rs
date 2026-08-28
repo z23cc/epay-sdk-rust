@@ -5,7 +5,9 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Html;
-use epay_sdk::axum::{NotifyAck, NotifyParams, VerifiedNotify, VerifiedReturn, callback_route};
+use epay_sdk::axum::{
+    NotifyAck, NotifyParams, NotifyRejection, VerifiedNotify, VerifiedReturn, callback_route,
+};
 use epay_sdk::{Money, Params, ProtocolContext, Signer};
 use tower::ServiceExt;
 
@@ -47,6 +49,14 @@ async fn notify(VerifiedNotify(data): VerifiedNotify) -> NotifyAck {
     }
 }
 
+/// Applications that want to count rejections extract the `Result`.
+async fn observed(result: Result<VerifiedNotify, NotifyRejection>) -> String {
+    match result {
+        Ok(VerifiedNotify(data)) => format!("success:{}", data.out_trade_no),
+        Err(NotifyRejection(error)) => format!("fail:{error}"),
+    }
+}
+
 async fn raw(NotifyParams(params): NotifyParams) -> String {
     params.get("out_trade_no").unwrap_or("-").to_owned()
 }
@@ -62,6 +72,7 @@ fn app() -> Router {
     Router::new()
         .route("/notify", callback_route(notify))
         .route("/raw", callback_route(raw))
+        .route("/observed", callback_route(observed))
         .route("/return", callback_route(return_page))
         .with_state(protocol())
 }
@@ -153,6 +164,18 @@ async fn request_limits_and_content_type_are_enforced() {
         .body(Body::from(signed_query("1001", "TRADE_SUCCESS", "9.90")))
         .unwrap();
     assert_eq!(send(request).await.1, "fail");
+}
+
+#[tokio::test]
+async fn rejection_can_be_observed_by_the_handler() {
+    let good = signed_query("1001", "TRADE_SUCCESS", "9.90");
+    let (status, body) = send(get_request("/observed", &good)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "success:ORDER001");
+
+    let (status, body) = send(get_request("/observed", "pid=1001&sign=bad")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.starts_with("fail:"), "{body}");
 }
 
 #[tokio::test]

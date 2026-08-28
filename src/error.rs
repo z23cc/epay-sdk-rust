@@ -284,10 +284,24 @@ impl Error {
     pub const MISSING_NOTIFY_URL: Self = Self::Param("notify_url is required");
     /// Product `name` is blank.
     pub const MISSING_NAME: Self = Self::Param("name is required");
-    /// Payment `type` is blank.
-    pub const INVALID_PAY_TYPE: Self = Self::Param("payment type must not be blank");
-    /// `device` is blank.
-    pub const INVALID_DEVICE: Self = Self::Param("device must not be blank");
+    /// Product `name` exceeds [`crate::limits::MAX_NAME_BYTES`].
+    pub const NAME_TOO_LONG: Self = Self::Param("name exceeds 255 bytes");
+    /// `param` exceeds [`crate::limits::MAX_PARAM_BYTES`].
+    pub const PARAM_TOO_LONG: Self = Self::Param("param exceeds 255 bytes");
+    /// `sitename` exceeds [`crate::limits::MAX_SITENAME_BYTES`].
+    pub const SITENAME_TOO_LONG: Self = Self::Param("sitename exceeds 64 bytes");
+    /// A callback URL exceeds [`crate::limits::MAX_CALLBACK_URL_BYTES`].
+    pub const CALLBACK_URL_TOO_LONG: Self =
+        Self::Param("notify_url / return_url exceeds 1024 bytes");
+    /// The signed request exceeds [`crate::limits::MAX_REQUEST_BYTES`].
+    pub const REQUEST_TOO_LARGE: Self =
+        Self::Param("encoded request exceeds 4096 bytes; shorten name, param or callback URLs");
+    /// Payment `type` is blank or not a short `[A-Za-z0-9_-]` identifier.
+    pub const INVALID_PAY_TYPE: Self =
+        Self::Param("payment type must be 1..=32 characters from [A-Za-z0-9_-]");
+    /// `device` is blank or not a short `[A-Za-z0-9_-]` identifier.
+    pub const INVALID_DEVICE: Self =
+        Self::Param("device must be 1..=32 characters from [A-Za-z0-9_-]");
     /// Amount is not positive or not parseable.
     pub const INVALID_MONEY: Self = Self::Param("money must be greater than 0");
     /// Amount carries meaningful precision beyond two decimal places.

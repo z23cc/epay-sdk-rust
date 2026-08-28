@@ -1,12 +1,14 @@
 use crate::config::{parse_callback_url, require_https_callback};
 use crate::error::{Error, Result};
+use crate::limits;
+use crate::params::Params;
 use crate::types::{Device, PayType};
 
 pub(crate) fn validate_out_trade_no(value: &str) -> Result<()> {
     if value.is_empty() {
         return Err(Error::MISSING_OUT_TRADE_NO);
     }
-    if value.len() > 64
+    if value.len() > limits::MAX_OUT_TRADE_NO_BYTES
         || value.trim() != value
         || !value
             .bytes()
@@ -32,19 +34,62 @@ pub(crate) fn validate_name(value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(Error::MISSING_NAME);
     }
-    Ok(())
-}
-
-pub(crate) fn validate_pay_type(value: &PayType) -> Result<()> {
-    if value.as_str().trim().is_empty() {
-        return Err(Error::INVALID_PAY_TYPE);
+    if value.len() > limits::MAX_NAME_BYTES {
+        return Err(Error::NAME_TOO_LONG);
     }
     Ok(())
 }
 
+pub(crate) fn validate_param(value: &str) -> Result<()> {
+    if value.len() > limits::MAX_PARAM_BYTES {
+        return Err(Error::PARAM_TOO_LONG);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_sitename(value: &str) -> Result<()> {
+    if value.len() > limits::MAX_SITENAME_BYTES {
+        return Err(Error::SITENAME_TOO_LONG);
+    }
+    Ok(())
+}
+
+/// Short ASCII identifier such as a channel or device name.
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= limits::MAX_IDENTIFIER_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+pub(crate) fn validate_pay_type(value: &PayType) -> Result<()> {
+    if is_identifier(value.as_str()) {
+        Ok(())
+    } else {
+        Err(Error::INVALID_PAY_TYPE)
+    }
+}
+
 pub(crate) fn validate_device(value: &Device) -> Result<()> {
-    if value.as_str().trim().is_empty() {
-        return Err(Error::INVALID_DEVICE);
+    if is_identifier(value.as_str()) {
+        Ok(())
+    } else {
+        Err(Error::INVALID_DEVICE)
+    }
+}
+
+/// Bound the encoded size of a signed request.
+pub(crate) fn validate_request_size(params: &Params) -> Result<()> {
+    if params.encode().len() > limits::MAX_REQUEST_BYTES {
+        return Err(Error::REQUEST_TOO_LARGE);
+    }
+    Ok(())
+}
+
+fn validate_callback_length(raw: &str) -> Result<()> {
+    if raw.len() > limits::MAX_CALLBACK_URL_BYTES {
+        return Err(Error::CALLBACK_URL_TOO_LONG);
     }
     Ok(())
 }
@@ -52,20 +97,24 @@ pub(crate) fn validate_device(value: &Device) -> Result<()> {
 /// Structural check only; the HTTPS policy is applied when the request is
 /// resolved against a [`crate::Config`].
 pub(crate) fn validate_notify_url(raw: &str) -> Result<()> {
+    validate_callback_length(raw)?;
     parse_callback_url(raw, Error::INVALID_NOTIFY_URL).map(|_| ())
 }
 
 /// Structural check only; see [`validate_notify_url`].
 pub(crate) fn validate_return_url(raw: &str) -> Result<()> {
+    validate_callback_length(raw)?;
     parse_callback_url(raw, Error::INVALID_RETURN_URL).map(|_| ())
 }
 
 pub(crate) fn enforce_notify_url_policy(raw: &str, allow_http: bool) -> Result<()> {
+    validate_callback_length(raw)?;
     let url = parse_callback_url(raw, Error::INVALID_NOTIFY_URL)?;
     require_https_callback(&url, allow_http, Error::INSECURE_NOTIFY_URL)
 }
 
 pub(crate) fn enforce_return_url_policy(raw: &str, allow_http: bool) -> Result<()> {
+    validate_callback_length(raw)?;
     let url = parse_callback_url(raw, Error::INVALID_RETURN_URL)?;
     require_https_callback(&url, allow_http, Error::INSECURE_RETURN_URL)
 }
@@ -125,6 +174,42 @@ mod tests {
         assert!(exactly_one_identifier(None, None).is_err());
         let id = exactly_one_identifier(Some("T1"), None).unwrap();
         assert_eq!(id.as_param(), ("trade_no", "T1"));
+    }
+
+    #[test]
+    fn field_limits() {
+        assert!(validate_name(&"n".repeat(limits::MAX_NAME_BYTES)).is_ok());
+        assert!(matches!(
+            validate_name(&"n".repeat(limits::MAX_NAME_BYTES + 1)),
+            Err(Error::Param(m)) if m.starts_with("name exceeds")
+        ));
+        assert!(validate_param(&"p".repeat(limits::MAX_PARAM_BYTES)).is_ok());
+        assert!(validate_param(&"p".repeat(limits::MAX_PARAM_BYTES + 1)).is_err());
+        assert!(validate_sitename(&"s".repeat(limits::MAX_SITENAME_BYTES + 1)).is_err());
+
+        assert!(validate_pay_type(&PayType::from("alipay_h5")).is_ok());
+        assert!(validate_pay_type(&PayType::from("")).is_err());
+        assert!(validate_pay_type(&PayType::from("ali pay")).is_err());
+        assert!(validate_pay_type(&PayType::from("x".repeat(33).as_str())).is_err());
+        assert!(validate_device(&Device::from("mobile")).is_ok());
+        assert!(validate_device(&Device::from("<script>")).is_err());
+
+        let long_url = format!("https://shop.example.com/{}", "a".repeat(1100));
+        assert!(matches!(
+            validate_notify_url(&long_url),
+            Err(Error::Param(m)) if m.contains("1024")
+        ));
+        assert!(enforce_return_url_policy(&long_url, true).is_err());
+
+        let mut params = Params::new();
+        params.insert("a", "x".repeat(limits::MAX_REQUEST_BYTES));
+        assert!(matches!(
+            validate_request_size(&params),
+            Err(Error::Param(m)) if m.starts_with("encoded request exceeds")
+        ));
+        let mut small = Params::new();
+        small.insert("a", "1");
+        assert!(validate_request_size(&small).is_ok());
     }
 
     #[test]

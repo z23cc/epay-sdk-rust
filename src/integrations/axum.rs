@@ -88,6 +88,12 @@ pub fn payer_ip(headers: &HeaderMap, peer: SocketAddr, trust_proxy_headers: bool
 /// Authenticated and structurally valid EPay notification.
 ///
 /// Requires `ProtocolContext: FromRef<S>`; [`Client`] satisfies this too.
+///
+/// Rejections are answered with `200 fail` and logged at **debug** level
+/// only: the endpoint is public, so anything louder would let unauthenticated
+/// traffic flood the logs. To count or sample rejections, extract
+/// `Result<VerifiedNotify, NotifyRejection>` instead and handle
+/// [`NotifyRejection`] in the handler (still returning [`NotifyAck::fail`]).
 #[derive(Clone, Debug)]
 pub struct VerifiedNotify(pub NotifyData);
 
@@ -157,14 +163,14 @@ where
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         let protocol = ProtocolContext::from_ref(state);
         let params = read_notify_params(request).await.map_err(|error| {
-            sdk_warn!("[epay-sdk] notify input rejected: {error}");
+            sdk_debug!("[epay-sdk] notify input rejected: {error}");
             NotifyRejection(error)
         })?;
         protocol
             .verify_notify(&params)
             .map(VerifiedNotify)
             .map_err(|error| {
-                sdk_warn!("[epay-sdk] notify verification rejected: {error}");
+                sdk_debug!("[epay-sdk] notify verification rejected: {error}");
                 NotifyRejection(error)
             })
     }

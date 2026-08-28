@@ -1,6 +1,7 @@
 //! Payment requests for `mapi.php` (API) and `submit.php` (form).
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::IpAddr;
 
 use serde::Deserialize;
@@ -10,12 +11,25 @@ use crate::config::Config;
 use crate::endpoint::Endpoint;
 use crate::error::{Error, Result};
 use crate::money::Money;
+use crate::params::redact_url_query;
 use crate::serde_util::default_on_null;
 use crate::types::{Device, PayType};
 use crate::validation::{
     enforce_notify_url_policy, enforce_return_url_policy, validate_device, validate_name,
-    validate_notify_url, validate_out_trade_no, validate_pay_type, validate_return_url,
+    validate_notify_url, validate_out_trade_no, validate_param, validate_pay_type,
+    validate_return_url, validate_sitename,
 };
+
+/// `Debug` helper: callback URLs with masked query, opaque data as a length.
+fn debug_url(value: &Option<String>) -> Option<String> {
+    value.as_deref().map(redact_url_query)
+}
+
+fn debug_len(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|value| format!("<{} bytes>", value.len()))
+}
 
 /// Request-level URL if it is non-blank, else the client default if non-blank;
 /// a blank override must not shadow a configured default.
@@ -71,7 +85,9 @@ fn validate_callback_overrides(notify_url: Option<&str>, return_url: Option<&str
 /// `client_ip` is **required** by EPay for this endpoint: the server answers
 /// `用户IP地址(clientip)不能为空` / `用户IP地址不合法` otherwise, so
 /// [`PaymentRequest::validate`] enforces a well-formed IPv4/IPv6 address.
-#[derive(Clone, Debug)]
+///
+/// `Debug` masks callback query strings and shows `param` as a length only.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct PaymentRequest {
     /// Payment channel.
@@ -92,6 +108,22 @@ pub struct PaymentRequest {
     pub device: Option<Device>,
     /// Opaque merchant data echoed back in the notification.
     pub param: Option<String>,
+}
+
+impl fmt::Debug for PaymentRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaymentRequest")
+            .field("pay_type", &self.pay_type)
+            .field("out_trade_no", &self.out_trade_no)
+            .field("notify_url", &debug_url(&self.notify_url))
+            .field("return_url", &debug_url(&self.return_url))
+            .field("name", &self.name)
+            .field("money", &self.money)
+            .field("client_ip", &self.client_ip)
+            .field("device", &self.device)
+            .field("param", &debug_len(&self.param))
+            .finish()
+    }
 }
 
 impl PaymentRequest {
@@ -163,6 +195,9 @@ impl PaymentRequest {
         validate_pay_type(&self.pay_type)?;
         validate_callback_overrides(self.notify_url.as_deref(), self.return_url.as_deref())?;
         validate_name(&self.name)?;
+        if let Some(param) = &self.param {
+            validate_param(param)?;
+        }
         match self.client_ip.as_deref().map(str::trim) {
             None | Some("") => return Err(Error::MISSING_CLIENT_IP),
             Some(ip) if ip.parse::<IpAddr>().is_err() => return Err(Error::INVALID_CLIENT_IP),
@@ -187,7 +222,8 @@ impl PaymentRequest {
 /// Page-jump (`submit.php`) payment request.
 ///
 /// `pay_type` is optional: omit it to land on the EPay cashier.
-#[derive(Clone, Debug)]
+/// `Debug` masks callback query strings and shows `param` as a length only.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct FormPaymentRequest {
     /// Payment channel; `None` shows the cashier page.
@@ -206,6 +242,21 @@ pub struct FormPaymentRequest {
     pub param: Option<String>,
     /// Site name shown on the cashier page.
     pub sitename: Option<String>,
+}
+
+impl fmt::Debug for FormPaymentRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FormPaymentRequest")
+            .field("pay_type", &self.pay_type)
+            .field("out_trade_no", &self.out_trade_no)
+            .field("notify_url", &debug_url(&self.notify_url))
+            .field("return_url", &debug_url(&self.return_url))
+            .field("name", &self.name)
+            .field("money", &self.money)
+            .field("param", &debug_len(&self.param))
+            .field("sitename", &self.sitename)
+            .finish()
+    }
 }
 
 impl FormPaymentRequest {
@@ -261,6 +312,12 @@ impl FormPaymentRequest {
         if let Some(pay_type) = &self.pay_type {
             validate_pay_type(pay_type)?;
         }
+        if let Some(param) = &self.param {
+            validate_param(param)?;
+        }
+        if let Some(sitename) = &self.sitename {
+            validate_sitename(sitename)?;
+        }
         Ok(())
     }
 
@@ -278,7 +335,9 @@ impl FormPaymentRequest {
 ///
 /// The gateway returns whichever destination fits the channel/device; at
 /// least one of `pay_url`, `qr_code` and `url_scheme` is guaranteed non-empty.
-#[derive(Clone, Debug, Deserialize)]
+/// `Debug` masks the query strings of those destinations so one-time payment
+/// links do not land in logs.
+#[derive(Clone, Deserialize)]
 #[non_exhaustive]
 pub struct PaymentResponse {
     /// EPay order number.
@@ -296,6 +355,18 @@ pub struct PaymentResponse {
     /// Unmodelled members of the response object.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl fmt::Debug for PaymentResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaymentResponse")
+            .field("trade_no", &self.trade_no)
+            .field("pay_url", &redact_url_query(&self.pay_url))
+            .field("qr_code", &redact_url_query(&self.qr_code))
+            .field("url_scheme", &redact_url_query(&self.url_scheme))
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 impl PaymentResponse {
@@ -456,6 +527,62 @@ mod tests {
         let resolved = req.prepare(&with_default).unwrap();
         assert_eq!(resolved.notify_url, "https://override.example.com/n");
         assert_eq!(resolved.return_url, Some("https://override.example.com/r"));
+    }
+
+    #[test]
+    fn debug_masks_callback_queries_and_opaque_data() {
+        let request = PaymentRequest::new(PayType::Alipay, "ORDER001", "P", money())
+            .notify_url("https://shop.example.com/notify?token=callback-secret")
+            .param("user=42&coupon=SECRET")
+            .client_ip("::1");
+        let text = format!("{request:?}");
+        assert!(!text.contains("callback-secret"), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(
+            text.contains("ORDER001") && text.contains("bytes"),
+            "{text}"
+        );
+
+        let form = FormPaymentRequest::new("ORDER001", "P", money())
+            .return_url("https://shop.example.com/r?sid=abc");
+        assert!(!format!("{form:?}").contains("sid=abc"));
+
+        let response: PaymentResponse = serde_json::from_str(
+            r#"{"trade_no":"T1","payurl":"https://pay.example.com/cashier?token=onetime","urlscheme":"alipays://platformapi/startapp?appId=1&code=onetime2"}"#,
+        )
+        .unwrap();
+        let text = format!("{response:?}");
+        assert!(!text.contains("onetime"), "{text}");
+        assert!(text.contains("T1"), "{text}");
+    }
+
+    #[test]
+    fn field_limits_are_enforced() {
+        let too_long_name = "n".repeat(crate::limits::MAX_NAME_BYTES + 1);
+        assert!(matches!(
+            PaymentRequest::new(PayType::Alipay, "O", too_long_name, money())
+                .client_ip("::1")
+                .validate(),
+            Err(Error::Param(m)) if m.starts_with("name exceeds")
+        ));
+        assert!(
+            FormPaymentRequest::new("O", "P", money())
+                .param("p".repeat(crate::limits::MAX_PARAM_BYTES + 1))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            FormPaymentRequest::new("O", "P", money())
+                .sitename("s".repeat(crate::limits::MAX_SITENAME_BYTES + 1))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            PaymentRequest::new("bad type", "O", "P", money())
+                .client_ip("::1")
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::protocol::{ProtocolContext, ProtocolContextBuilder};
 use crate::refund::{RefundRequest, RefundResponse};
 use crate::signer::Signer;
 use crate::transport::{Transport, TransportOptions};
+use crate::validation::validate_request_size;
 
 /// Per-call overrides for [`Client`] methods ending in `_with`.
 ///
@@ -190,6 +191,7 @@ impl Client {
         params.insert_opt("param", request.param.clone());
 
         let signed = self.signer().sign_with_params(params);
+        validate_request_size(&signed)?;
         let response: PaymentResponse = self
             .post_json(Endpoint::CreatePayment, &Params::new(), signed, options)
             .await?;

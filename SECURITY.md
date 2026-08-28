@@ -57,4 +57,8 @@ some weaknesses are inherent and must be handled by the application:
 - Credentials echoed by the gateway (`key`, `sign`) are stripped from
   successful responses before they reach application code.
 - `VerifiedNotify` / `verify_notify` accept a notification only if the
-  signature, PID and all required fields validate.
+  signature, PID and all required fields validate. Rejections are logged at
+  `debug` only, so unauthenticated traffic to the public callback endpoint
+  cannot flood logs; observe them via `Result<VerifiedNotify, NotifyRejection>`.
+- Outbound requests are size-bounded (`epay_sdk::limits`), so application
+  input cannot turn into oversized signed URLs or forms.

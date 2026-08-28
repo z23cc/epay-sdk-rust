@@ -15,6 +15,8 @@ README 只讲 Axum 的最短路径；这里是其余细节。所有代码片段�
 - [可观测性](#可观测性)
 - [旧 HTTP 网关](#旧-http-网关)
 - [其它 Web 框架](#其它-web-框架)
+- [观察被拒绝的回调](#观察被拒绝的回调)
+- [出站字段上限](#出站字段上限)
 - [金额](#金额)
 - [环境变量](#环境变量)
 - [自定义 HTTP](#自定义-http)
@@ -49,6 +51,7 @@ test-util feature → MockTransport、NotifyFixture
 ```
 
 - 网关响应先校验 `code` / `msg` 包络，再解析成功结构；成功结构不携带 `code`（退款回执保留 `msg`）。
+- 请求 / 响应类型的 `Debug` 掩盖回调与支付链接的 query，`param` 只显示长度。
 - `api.php` 只使用官方 `pid + key` 鉴权。
 - 通知 query + form 合计最多 16 KiB，重复字段和冲突字段直接拒绝。
 
@@ -228,6 +231,46 @@ let data = protocol.verify_notify(&params)?;
 ```
 
 调用方仍需先限制原始 HTTP 输入大小；也可以使用 `parse_raw_notify_params_with_limits`。回调必须同时接受 GET 和 POST。
+
+## 观察被拒绝的回调
+
+`notify_url` 是公开端点，任何人都能向它发垃圾请求，所以 `VerifiedNotify` 对拒绝只记 `debug` 级日志，不会制造 warn 洪峰。需要计数、采样或告警时，把抽取器写成 `Result`，拒绝原因就交到 handler 手里（仍然返回 `fail`）：
+
+```rust
+use epay_sdk::axum::{NotifyAck, NotifyRejection, VerifiedNotify};
+
+async fn notify(result: Result<VerifiedNotify, NotifyRejection>) -> NotifyAck {
+    match result {
+        Ok(VerifiedNotify(data)) => {
+            // 正常处理
+            let _ = data;
+            NotifyAck::ok()
+        }
+        Err(NotifyRejection(error)) => {
+            // 在这里接入你的指标 / 采样日志；错误文本已脱敏
+            metrics_counter("epay_notify_rejected", error.code());
+            NotifyAck::fail()
+        }
+    }
+}
+# fn metrics_counter(_name: &str, _code: i32) {}
+```
+
+## 出站字段上限
+
+下单和表单请求在本地校验长度，避免超长字段拼出异常大的 URL / 表单（常量在 `epay_sdk::limits`）：
+
+| 字段 | 上限 |
+|---|---|
+| `out_trade_no` | 64 字节，`[A-Za-z0-9._\|-]` |
+| `name` | 255 字节 |
+| `param` | 255 字节 |
+| `sitename` | 64 字节 |
+| `notify_url` / `return_url` | 1024 字节 |
+| 自定义 `type` / `device` | 32 字节，`[A-Za-z0-9_-]` |
+| 签名后的整个请求（编码后） | 4096 字节 |
+
+超限返回 `Error::Param`（如 `NAME_TOO_LONG`、`REQUEST_TOO_LARGE`）。这些是保守值，官方 PHP 实现和数据库列都能容纳。
 
 ## 金额
 

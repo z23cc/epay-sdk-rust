@@ -148,14 +148,20 @@ fn is_secret(key: &str) -> bool {
 
 fn redacted_value(key: &str, value: &str) -> String {
     if key.ends_with("_url") {
-        if let Ok(mut url) = url::Url::parse(value) {
-            if url.query().is_some() {
-                url.set_query(Some("***"));
-            }
-            return url.to_string();
-        }
+        return redact_url_query(value);
     }
     value.to_owned()
+}
+
+/// Mask the query string of a URL-like value for logs; non-URLs pass through.
+pub(crate) fn redact_url_query(value: &str) -> String {
+    match url::Url::parse(value) {
+        Ok(mut url) if url.query().is_some() => {
+            url.set_query(Some("***"));
+            url.to_string()
+        }
+        _ => value.to_owned(),
+    }
 }
 
 impl fmt::Debug for Params {

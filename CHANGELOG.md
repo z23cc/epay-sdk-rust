@@ -43,6 +43,8 @@ the unpublished 0.1 line.
 - `test_util::NotifyFixture` for signed notification payloads in tests.
 - Strict notification parser: duplicate / conflicting / malformed fields
   rejected; combined 16 KiB budget; `NotifyLimits`.
+- `limits` module: outbound caps for `name`, `param`, `sitename`, callback
+  URLs, custom `type` / `device` identifiers and the encoded request size.
 - Settlement rows bound to the configured PID.
 - Environment configuration is testable (`EPAY_MAX_RETRIES` added).
 - Complete API documentation (`#![warn(missing_docs)]`), README doctests,
@@ -83,6 +85,11 @@ the unpublished 0.1 line.
   zeroized when the last handle is dropped.
 - `RawNotifyParams` / `RawNotifyEntry` / `NotifyFixture` mask `key` and
   `sign` in `Debug`, so a logged notification cannot be replayed from logs.
+- `PaymentRequest` / `FormPaymentRequest` / `PaymentResponse` mask callback
+  and payment-link query strings in `Debug`; `param` shows its length only.
+- `VerifiedNotify` logs rejections at `debug` instead of `warn` (public
+  endpoint); extract `Result<VerifiedNotify, NotifyRejection>` to observe
+  them.
 - `MockTransport::recorded()` stores query/form as `Params` (redacting
   `Debug`) rather than a URL containing `key=`.
 - Notifications must carry `sign_type=MD5`, match the configured PID and
