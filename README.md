@@ -2,7 +2,7 @@
 
 彩虹易支付（EPay）V1 的 Rust SDK，为 Axum 服务设计：一个 `Client` 放进 State，回调用抽取器验签，下单 / 查询 / 退款用 async 方法。
 
-MSRV 1.85。进阶用法见 [docs/GUIDE.md](docs/GUIDE.md)，变更见 [CHANGELOG.md](CHANGELOG.md)，安全说明见 [SECURITY.md](SECURITY.md)。
+MSRV 1.85。API 文档见 [docs.rs/epay-sdk](https://docs.rs/epay-sdk)，进阶用法见 [docs/GUIDE.md](docs/GUIDE.md)，变更见 [CHANGELOG.md](CHANGELOG.md)，安全说明见 [SECURITY.md](SECURITY.md)。
 
 ## 安装
 
@@ -50,10 +50,13 @@ async fn create_payment(
     let request = PaymentRequest::new(PayType::Alipay, "ORDER001", "VIP会员", money)
         // mapi.php 要求付款者 IP；反向代理后把第三个参数设为 true（只信任你自己的代理）
         .client_ip_addr(payer_ip(&headers, peer, false));
-    let response = state.epay.create_payment(&request).await.map_err(|error| {
-        log::warn!("create_payment failed: {error}"); // 错误文本已脱敏
-        StatusCode::BAD_GATEWAY
-    })?;
+    // 错误文本已脱敏（不含密钥 / URL），可以直接记入日志；用 error.kind() 做状态码映射见 GUIDE
+    let response = state
+        .epay
+        .create_payment(&request)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    // 微信 / 扫码渠道可能只返回二维码内容：用 response.destination() 按渠道处理（见 GUIDE）
     Ok(Json(response.pay_url))
 }
 
@@ -112,6 +115,7 @@ let client = epay_sdk::Client::builder(1001, "merchant-key", "https://pay.exampl
 use epay_sdk::{FormPaymentRequest, Money, PayType};
 
 // 页面跳转支付（submit.php）：直接返回给浏览器的自动提交表单
+// （含内联 script；严格 CSP 下改用 prepare_form_payment() 自行渲染）
 let html = client.build_form_payment(
     &FormPaymentRequest::new("ORDER002", "商品", Money::from_yuan_str("1.00")?)
         .pay_type(PayType::Wxpay),
