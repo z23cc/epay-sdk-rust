@@ -1,6 +1,6 @@
 [package]
 name = "epay-sdk"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
 description = "EPay (易支付) SDK for Rust — 彩虹易支付 V1 compatible client with an axum integration"

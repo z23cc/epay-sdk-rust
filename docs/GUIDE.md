@@ -15,7 +15,7 @@ README 只讲 Axum 的最短路径；这里是其余细节。所有代码片段�
 - [错误处理](#错误处理)
 - [阻塞调用](#阻塞调用blocking-feature)
 - [可观测性](#可观测性)
-- [旧 HTTP 网关](#旧-http-网关)
+- [旧 HTTP 网关与本地回调](#旧-http-网关与本地回调)
 - [其它 Web 框架](#其它-web-框架)
 - [多商户回调](#多商户回调)
 - [观察被拒绝的回调](#观察被拒绝的回调)
@@ -24,26 +24,30 @@ README 只讲 Axum 的最短路径；这里是其余细节。所有代码片段�
 - [环境变量](#环境变量)
 - [自定义 HTTP](#自定义-http)
 - [测试回调](#测试回调)
-- [0.1 → 0.2 迁移](#01--02-迁移)
 
 ## 架构
 
 ```text
 ProtocolContext（无 HTTP / 无运行时依赖）
-├── Config：商户号、密钥、网关地址、回调默认值
+├── Config：商户号、密钥（共享、释放时清零）、网关地址、回调默认值
 ├── MD5 签名和验签
-├── 表单支付 URL / HTML
-└── 严格通知验证
+├── PreparedForm：签名后的 submit.php 部件（URL / HTML / 自渲染）
+└── 严格通知验证（NotifyData / SuccessfulNotify）
 
 Client
 ├── ProtocolContext
-├── HttpConfig：超时、响应大小上限、RetryPolicy
+├── HttpConfig：per-attempt 超时、连接超时、响应大小上限、RetryPolicy
 ├── reqwest 或自定义 Transport
-├── mapi.php / api.php 异步接口（按 Endpoint 枚举分发）
-└── CallOptions：单次调用的超时 / 重试覆盖
+├── mapi.php / api.php 异步接口（按 Endpoint 枚举分发，出站大小受 limits 约束）
+├── CallOptions：单次调用的超时 / 重试覆盖
+└── PaymentDestination：下单响应里的支付入口
+
+Error → ErrorKind / Endpoint：稳定的分类与端点，供指标和 HTTP 映射
 
 axum feature（axum 关闭默认特性，不引入 tokio / hyper）
-├── VerifiedNotify / VerifiedReturn / NotifyParams 抽取器
+├── VerifiedNotify / VerifiedReturn：单商户验签抽取器
+├── ParsedNotify：只解析不验签，多商户按路径选密钥
+├── NotifyParams：诊断用，拒绝回 400
 ├── NotifyAck
 ├── callback_route：GET + POST 一次注册
 └── payer_ip：反代后的付款者 IP
@@ -256,7 +260,7 @@ let merchant = client.query_merchant()?;
 
 ## 可观测性
 
-`debug(true)` 时输出脱敏后的请求 / 响应。未开启 `tracing` feature 时走 `log`；开启后**只**走 `tracing`（不会同时发 `log`，因此安装了 `LogTracer` 的应用不会看到重复事件），每次网关调用都在 `epay.request` span（字段 `endpoint`、`method`）内执行，重试和回调拒绝以 `warn` 事件记录。
+`debug(true)` 时输出脱敏后的请求 / 响应。未开启 `tracing` feature 时走 `log`；开启后**只**走 `tracing`（不会同时发 `log`，因此安装了 `LogTracer` 的应用不会看到重复事件），每次网关调用都在 `epay.request` span（字段 `endpoint`、`method`）内执行。重试以 `warn` 记录；回调拒绝只记 `debug`（公开端点，避免日志放大，见下文“观察被拒绝的回调”）。
 
 ## 旧 HTTP 网关与本地回调
 
@@ -454,22 +458,4 @@ let query = NotifyFixture::new(1001, "testkey123", "ORDER001", Money::from_yuan_
 
 仓库自身的回归依赖两类附加测试：`tests/fixtures/*.json` 是脱敏后的真实分支响应（可空列、字符串数字、`data: null`、回显 key、退款 `code: 0` 等），遇到新分支的奇怪响应时把它脱敏后加进去即可；`tests/properties.rs` 用 proptest 对通知解析器、`Params` 编码 / 签名、`Money` 字符串和表单 HTML 转义做随机输入测试。
 
-## 0.1 → 0.2 迁移
-
-- 表单/验签服务：`Client` → `ProtocolContext`。
-- Axum `FromRef<AppState>`：返回 `ProtocolContext`，不再要求完整 HTTP Client。
-- 超时和响应上限移入 `HttpConfig`，只在 `ClientBuilder` 上设置。
-- 响应结构体不再包含 `code` / `is_success()`（`RefundResponse::msg` 作为退款回执保留）；错误通过 `Error::Api { endpoint, code, .. }` 报告。
-- `PayType` / `Device` / `OrderStatus` / `Endpoint` / `Error` 为 `#[non_exhaustive]`，`match` 需要通配分支。
-- `Error::Transport` 变为 `{ kind, message }`；通知类错误统一为 `Error::Notify`。
-- `PaymentRequest::validate` / `FormPaymentRequest::validate` 不再接收默认 `notify_url`。
-- `Signer::new`、`parse_notify_params`、`generate_out_trade_no` 现在返回 `Result`。
-- `NotifyData::money` 现在是 `Money`；签名字段不再保留在 domain object。
-- `Money` 默认不再隐式舍入。
-- `MerchantApiAuth` 和 `EPAY_API_AUTH` 已删除。
-- `Config` 字段改为只读访问器，API URL 使用 `Url`。
-- `Transport` 方法接收 `&Url` 和 `TransportOptions`，`post_form` 接收 `&[(&str, &str)]`，`sleep` 必须实现。
-- 响应结构体新增 `extra` 字段。
-- `MockTransport` 需要 `test-util` feature。
-
-完整变更见 [CHANGELOG.md](../CHANGELOG.md)。
+版本变更见 [CHANGELOG.md](../CHANGELOG.md)。

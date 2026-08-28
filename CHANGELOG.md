@@ -6,115 +6,79 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-08-28
+## [1.0.0] - 2026-08-28
 
-First release intended for production use. Everything below is relative to
-the unpublished 0.1 line.
+First public release. The public API is considered stable from here:
+breaking changes require a major version bump; new `ErrorKind` /
+`Endpoint` / enum variants may arrive in minor versions behind
+`#[non_exhaustive]`.
 
-### Added
-- `ProtocolContext`: transport-free signing, form building and callback
-  verification; the recommended Axum state.
-- `Endpoint` enum carried by `Error::Api` / `Error::InvalidResponse`; single
-  source of truth for path, `act`, HTTP method and success codes (refund
-  accepts the official `0` and fork `1`).
-- `HttpConfig` (timeout, response limit, retry policy) separated from the
-  protocol `Config`.
-- `RetryPolicy` and `Error::is_retryable()`: opt-in retries with exponential
-  back-off for GET endpoints only; payments and refunds are never retried.
-- `CallOptions` and `*_with` client methods for per-call timeout / retry.
-- `TransportOptions` passed to `Transport`; `Transport::sleep` hook for
-  back-off.
-- `TransportErrorKind`, `Error::transport_kind()`, `Error::is_timeout()`;
-  `Error::transport()` is public for custom transports.
-- `extra: BTreeMap<String, Value>` on every response struct preserving
-  fork-specific fields (`bill_trade_no`, `pay_fee`, …); the envelope `code`
-  and any echoed `key` / `sign` are stripped first.
-- Pagination helpers `OrderListResponse::has_more` / `next_page` and
-  `Client::query_all_orders(limit, max_pages)`.
-- `Money` implements `Serialize`/`Deserialize` (wire string or integer
-  JSON number; fractional JSON numbers are rejected) and
-  `Money::try_to_fen()` (errors instead of saturating).
+### Protocol
+- 彩虹易支付 V1: `POST mapi.php` (API payment, `clientip` required and
+  validated), `submit.php` form / redirect payment, `api.php` order, orders,
+  refund (`POST`, `act` in the query string, official success code `0` and
+  fork `1`), merchant and settlement queries.
+- `Endpoint` enum is the single source of truth for path, `act`, HTTP
+  method and success codes; carried by `Error::Api` / `Error::InvalidResponse`.
+- Response envelopes (`code` / `msg`) are checked before the success payload
+  is decoded; PHP `null` columns and `data: null` map to empty values;
+  unmodelled fields are preserved in `extra` (`code`, `key` and `sign` are
+  stripped first).
+- Strict notification verification: `sign_type=MD5`, signature, PID and all
+  required fields; duplicate / conflicting / malformed fields rejected;
+  combined 16 KiB budget (`NotifyLimits`); `NotifyData` / `SuccessfulNotify`.
+
+### Core API
+- `ProtocolContext` (transport-free signing, forms, callback verification)
+  and `Client` (async gateway calls) with `ProtocolContextBuilder` /
+  `ClientBuilder`, `from_env`, and a `Config` / `HttpConfig` split.
 - `PreparedForm` + `prepare_form_payment()` for CSP-friendly form rendering
   (read-only `action()` / `params()`, `hidden_inputs`, `redirect_url`,
   `auto_submit_html`, `into_parts`).
 - `PaymentDestination` + `PaymentResponse::destination()/destinations()`.
-- `ErrorKind`, `Error::kind()` and `Error::endpoint()` for exhaustive
-  matching and metrics without touching the non-exhaustive `Error`.
-- `ClientBuilder::connect_timeout` / `EPAY_CONNECT_TIMEOUT_SECS` (zero or
-  combining with a caller-supplied reqwest client fails at build); request
-  timeouts are documented as per-attempt.
-- Axum `ParsedNotify` extractor (parse only, `200 fail` on rejection) for
-  multi-merchant callback routing.
-- Property tests (proptest) and sanitized real-fork response fixtures.
-- `blocking` feature: `blocking::Client` for non-async programs.
-- `tracing` feature: a span per gateway call plus retry/warn events;
-  replaces `log` output instead of duplicating it.
-- Axum `VerifiedReturn` extractor and `NotifyParams` fallible extractor;
-  `callback_route` (GET + POST in one call) and `payer_ip` helper;
-  `PaymentRequest::client_ip_addr`.
-- `test_util::NotifyFixture` for signed notification payloads in tests.
-- Strict notification parser: duplicate / conflicting / malformed fields
-  rejected; combined 16 KiB budget; `NotifyLimits`.
-- `limits` module: outbound caps for `name`, `param`, `sitename`, callback
-  URLs, custom `type` / `device` identifiers and the encoded request size.
-- Settlement rows bound to the configured PID.
-- Environment configuration is testable (`EPAY_MAX_RETRIES` added).
-- Complete API documentation (`#![warn(missing_docs)]`), README doctests,
-  CI workflow, `cargo-deny` configuration, `SECURITY.md`.
+- `Money`: exact two-decimal amounts, explicit `*_rounded` constructors,
+  serde (wire string or integer JSON number), `try_to_fen()`.
+- `RetryPolicy` for GET endpoints only (per-attempt timeout, exponential
+  back-off), `CallOptions` with `*_with` variants, `connect_timeout`.
+- Pagination helpers `OrderListResponse::has_more` / `next_page` and bounded
+  `Client::query_all_orders`.
+- `ErrorKind`, `Error::kind()` and `Error::endpoint()` for stable
+  low-cardinality matching and metrics; callers keep a fallback arm.
+  `TransportErrorKind`, `Error::is_retryable()`, `Error::transport()` and
+  `Error::http()` for custom transports.
+- `Transport` trait with `TransportOptions` and a required `sleep` hook;
+  built-in reqwest transport (rustls or native-tls).
+- `limits` module: caps for `name`, `param`, `sitename`, callback URLs,
+  custom `type` / `device` identifiers and the encoded request size.
+- Public enums and structs are `#[non_exhaustive]`.
 
-### Changed
-- `mapi.php` is sent as `POST`; `clientip` is required and validated.
-- Refund is `POST api.php?act=refund` with `act` in the query string.
-- API base URL must be HTTPS unless `allow_insecure_http(true)`; callback
-  URLs (configured defaults and request overrides) must be HTTPS unless
-  `allow_insecure_callback_http(true)` / `EPAY_ALLOW_INSECURE_CALLBACK_HTTP`.
-- SDK-created reqwest client: no redirects, streaming response limit
-  (1 MiB default), URL-free error messages, per-request timeouts. A
-  caller-supplied `reqwest::Client` keeps its own redirect policy.
-- `Money` constructors reject more than two decimals; explicit `*_rounded`
-  variants round.
-- Response structs no longer expose `code` / `msg` / `is_success()`
-  (`RefundResponse::msg` remains).
-- `PaymentRequest::validate` / `FormPaymentRequest::validate` no longer take
-  a default `notify_url`.
-- `Transport::post_form` takes `&[(&str, &str)]` and `TransportOptions`.
-- `Error` and public enums/structs are `#[non_exhaustive]`; notify errors
-  are reported as `Error::Notify` (signature mismatch stays `VerifyFailed`).
-- `Signer::new`, `parse_notify_params`, `generate_out_trade_no` return
-  `Result`.
-- `axum` dependency is pulled in without default features.
-
-### Removed
-- `MerchantApiAuth` / `EPAY_API_AUTH` (the official gateway has no merchant
-  `sign` mode for `api.php`).
-- `Params::with_capacity`.
-- Actix Web integration (use `parse_notify_params` + `verify_notify`).
+### Integrations and features
+- `axum` (no default features): `VerifiedNotify`, `VerifiedReturn`,
+  `ParsedNotify` (multi-merchant routing), `NotifyParams`, `NotifyAck`,
+  `callback_route`, `payer_ip`.
+- `blocking`: `blocking::Client` for non-async programs.
+- `tracing`: a span per gateway call; replaces `log` output instead of
+  duplicating it.
+- `test-util`: `MockTransport` / `RecordedRequest` and `NotifyFixture`.
 
 ### Security
-- Merchant key, signatures and callback query strings are masked in `Debug`,
-  logs and error text; `MerchantInfo` masks the echoed key in `Debug`.
-- The merchant key is held once, shared by `Config` and `Signer`, and
-  zeroized when the last handle is dropped.
-- `RawNotifyParams` / `RawNotifyEntry` / `NotifyFixture` mask `key` and
-  `sign` in `Debug`, so a logged notification cannot be replayed from logs.
-- `PaymentRequest` / `FormPaymentRequest` / `PaymentResponse` mask callback
-  and payment-link query strings in `Debug` (unparseable URLs show their
-  length only); `param` and `qr_code` show their length, `extra` its keys.
-- `NotifyData::param`, `OrderDetail::buyer`/`param`, `Settlement::account`
-  and `MerchantInfo::account` show only their length in `Debug`; payment
-  links in `PaymentResponse` / `PaymentDestination` `Debug` are reduced to
-  scheme and host.
-- Every outbound request is size-checked in the client's GET/POST paths;
-  `name` / `sitename` reject control characters; `mapi.php` success
-  responses require a well-formed `trade_no`.
-- `VerifiedNotify` logs rejections at `debug` instead of `warn` (public
-  endpoint); extract `Result<VerifiedNotify, NotifyRejection>` to observe
-  them.
-- `MockTransport::recorded()` stores query/form as `Params` (redacting
-  `Debug`) rather than a URL containing `key=`.
-- Notifications must carry `sign_type=MD5`, match the configured PID and
-  have structurally valid order number, amount and status before they are
-  handed to application code.
+- API base URL and callback URLs must be HTTPS unless explicitly allowed
+  (`allow_insecure_http`, `allow_insecure_callback_http`).
+- SDK-created reqwest client follows no redirects, bounds response bodies
+  (1 MiB default, streamed) and reports errors without the request URL.
+- Merchant key is held once (`Config` and `Signer` share it) and zeroized
+  on drop; key, signatures, callback query strings, payment links and
+  personal fields (`param`, `buyer`, settlement accounts) are masked in
+  `Debug`, logs and error text.
+- `VerifiedNotify` rejections are logged at `debug` only; observe them via
+  `Result<VerifiedNotify, NotifyRejection>`.
+- Every outbound request is size-bounded before it reaches the transport;
+  `name` / `sitename` reject control characters.
 
-[Unreleased]: https://github.com/z23cc/epay-sdk-rust/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/z23cc/epay-sdk-rust/releases/tag/v0.2.0
+### Tooling
+- Complete API documentation, README and guide compiled as doctests, CI
+  (stable + 1.85 MSRV, feature matrix, cargo-deny, package), property tests
+  (proptest) and sanitized real-fork response fixtures.
+
+[Unreleased]: https://github.com/z23cc/epay-sdk-rust/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/z23cc/epay-sdk-rust/releases/tag/v1.0.0

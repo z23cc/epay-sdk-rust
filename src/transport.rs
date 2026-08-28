@@ -18,8 +18,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct TransportOptions {
     /// Stop reading once the body would exceed this many bytes.
     pub max_response_bytes: usize,
-    /// Whole-request timeout for this call; `None` keeps the transport's
-    /// own default.
+    /// Per-attempt timeout for this call; `None` keeps the transport's own
+    /// default.
     pub timeout: Option<Duration>,
 }
 

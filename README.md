@@ -8,7 +8,7 @@ MSRV 1.85。进阶用法见 [docs/GUIDE.md](docs/GUIDE.md)，变更见 [CHANGELO
 
 ```toml
 [dependencies]
-epay-sdk = { version = "0.2", features = ["axum"] }
+epay-sdk = { version = "1", features = ["axum"] }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
@@ -132,13 +132,14 @@ if order.is_paid() {
 - **通知验证是严格的**：`VerifiedNotify` 要求 `sign_type=MD5`、签名正确、PID 与配置一致、订单号 / 金额 / 状态结构有效，重复或冲突的字段直接拒绝；拒绝时自动回 `200 fail` 让网关重试。它不做订单查找、金额核对和幂等——那是你的 handler 的事（协议没有防重放，必须按 `out_trade_no` 幂等）。
 - **金额不会悄悄变**：`Money` 只接受最多两位小数，`"9.999"` 报错而不是四舍五入；有 serde，可直接放进订单结构体。
 - **网关兼容**：`mapi.php` 走 POST 并强制 `clientip`；退款走 `POST api.php?act=refund` 且接受官方成功码 `0`；PHP 返回的 `null` 映射为空值；各分支多出来的字段保留在响应的 `extra` 里。
-- **安全默认值**：API 地址和回调地址都必须 HTTPS（旧网关 / 本地联调各有独立的显式放行开关）；SDK 自建的 reqwest 不跟随重定向、响应最多 1 MiB；商户密钥只保存一份并在释放时清零；密钥、签名和回调 query 在 `Debug` / 日志 / 错误文本中一律脱敏。
-- **下单和退款永不自动重试**；查询接口可按需开启 `RetryPolicy`。
+- **安全默认值**：API 地址和回调地址都必须 HTTPS（旧网关 / 本地联调各有独立的显式放行开关）；SDK 自建的 reqwest 不跟随重定向、响应最多 1 MiB；出站请求字段和总大小有上限；商户密钥只保存一份并在释放时清零；密钥、签名、回调 query、支付链接和可能含隐私的字段（`param`、`buyer`、结算账号）在 `Debug` / 日志 / 错误文本中一律脱敏。
+- **下单和退款永不自动重试**；查询接口可按需开启 `RetryPolicy`（超时是 per-attempt 的）。
+- **错误可稳定分类**：`Error::kind()` 给出低基数的 `ErrorKind`，`Error::endpoint()` 给出涉及的网关端点，不必匹配 `Error` 本身。
 - 公共类型都是 `#[non_exhaustive]`，`match` 请带通配分支。
 
 ## 进阶
 
-[docs/GUIDE.md](docs/GUIDE.md) 覆盖：只用 `ProtocolContext` 的无 HTTP 服务、CSP 友好的 `PreparedForm`、支付目标地址、重试与单次调用选项（per-attempt 超时）、分页、`extra` 字段、`ErrorKind` 与 HTTP 响应映射、多商户回调（`ParsedNotify`）、`blocking` / `tracing` feature、自定义 `Transport`、环境变量、用 `NotifyFixture` 测试回调、0.1 → 0.2 迁移。
+[docs/GUIDE.md](docs/GUIDE.md) 覆盖：只用 `ProtocolContext` 的无 HTTP 服务、CSP 友好的 `PreparedForm`、支付目标地址、重试与单次调用选项（per-attempt 超时、连接超时）、分页、`extra` 字段、`ErrorKind` 与 HTTP 响应映射、旧 HTTP 网关与本地回调、多商户回调（`ParsedNotify`）、观察被拒绝的回调、出站字段上限、`blocking` / `tracing` feature、自定义 `Transport`、环境变量、用 `NotifyFixture` 和真实分支 fixture 测试。
 
 ## 验证
 
