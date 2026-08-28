@@ -1,0 +1,7 @@
+/target
+# Local-only tooling (live gateway dashboard); never committed or packaged.
+/local/
+**/*.rs.bk
+.DS_Store
+.env
+.env.*
