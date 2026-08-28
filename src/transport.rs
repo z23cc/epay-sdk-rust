@@ -210,6 +210,7 @@ mod mock {
 
     use super::{BoxFuture, Transport, TransportOptions};
     use crate::error::{Error, Result, TransportErrorKind};
+    use crate::params::Params;
 
     /// Scripted transport for tests: responses are served in FIFO order and
     /// every request is recorded. Retry back-off sleeps are recorded instead
@@ -227,14 +228,20 @@ mod mock {
     }
 
     /// A request observed by [`MockTransport`].
+    ///
+    /// The query string and form are kept as [`Params`], whose `Debug`
+    /// output masks `key` / `sign`, so a failing test never prints a real
+    /// merchant key; assert on them with [`Params::get`].
     #[derive(Clone, Debug)]
     pub struct RecordedRequest {
         /// `GET` or `POST`.
         pub method: &'static str,
-        /// Full request URL including query.
+        /// Request URL without its query string.
         pub url: String,
-        /// Form pairs for POST requests; empty for GET.
-        pub form: Vec<(String, String)>,
+        /// Decoded query parameters.
+        pub query: Params,
+        /// Form parameters for POST requests; empty for GET.
+        pub form: Params,
         /// Options the client passed for this request.
         pub options: TransportOptions,
     }
@@ -306,16 +313,20 @@ mod mock {
             &self,
             method: &'static str,
             url: &Url,
-            form: Vec<(String, String)>,
+            form: Params,
             options: TransportOptions,
         ) -> Result<Vec<u8>> {
+            let query: Params = url.query_pairs().collect();
+            let mut bare = url.clone();
+            bare.set_query(None);
             self.inner
                 .requests
                 .lock()
                 .expect("mock transport mutex")
                 .push(RecordedRequest {
                     method,
-                    url: url.to_string(),
+                    url: bare.to_string(),
+                    query,
                     form,
                     options,
                 });
@@ -346,7 +357,7 @@ mod mock {
             url: &'a Url,
             options: TransportOptions,
         ) -> BoxFuture<'a, Result<Vec<u8>>> {
-            Box::pin(async move { self.next("GET", url, Vec::new(), options) })
+            Box::pin(async move { self.next("GET", url, Params::new(), options) })
         }
 
         fn post_form<'a>(
@@ -355,10 +366,7 @@ mod mock {
             form: &'a [(&'a str, &'a str)],
             options: TransportOptions,
         ) -> BoxFuture<'a, Result<Vec<u8>>> {
-            let form = form
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect();
+            let form: Params = form.iter().copied().collect();
             Box::pin(async move { self.next("POST", url, form, options) })
         }
 

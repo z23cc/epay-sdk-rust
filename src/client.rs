@@ -706,11 +706,9 @@ impl ClientBuilder {
 mod tests {
     use std::collections::HashMap;
 
-    use url::Url;
-
     use super::*;
     use crate::error::{TransportErrorKind, code};
-    use crate::transport::{MockTransport, RecordedRequest};
+    use crate::transport::MockTransport;
     use crate::types::{Device, PayType};
 
     fn client_with(transport: MockTransport) -> Client {
@@ -720,22 +718,6 @@ mod tests {
             .transport(transport)
             .build()
             .unwrap()
-    }
-
-    fn form_value<'a>(request: &'a RecordedRequest, key: &str) -> Option<&'a str> {
-        request
-            .form
-            .iter()
-            .find(|(name, _)| name == key)
-            .map(|(_, value)| value.as_str())
-    }
-
-    fn query_value(request: &RecordedRequest, key: &str) -> Option<String> {
-        Url::parse(&request.url)
-            .unwrap()
-            .query_pairs()
-            .find(|(name, _)| name == key)
-            .map(|(_, value)| value.into_owned())
     }
 
     fn money() -> Money {
@@ -763,23 +745,23 @@ mod tests {
         let recorded = transport.recorded();
         assert_eq!(recorded[0].method, "POST");
         assert_eq!(recorded[0].url, "https://pay.example.com/mapi.php");
-        assert_eq!(form_value(&recorded[0], "clientip"), Some("127.0.0.1"));
+        assert!(recorded[0].query.is_empty());
+        assert_eq!(recorded[0].form.get("clientip"), Some("127.0.0.1"));
         assert_eq!(
-            form_value(&recorded[0], "notify_url"),
+            recorded[0].form.get("notify_url"),
             Some("https://shop.example.com/notify")
         );
         assert_eq!(
-            form_value(&recorded[0], "return_url"),
+            recorded[0].form.get("return_url"),
             Some("https://shop.example.com/return")
         );
-        assert_eq!(form_value(&recorded[0], "key"), None);
+        assert_eq!(recorded[0].form.get("key"), None);
         assert_eq!(
             recorded[0].options.timeout,
             Some(HttpConfig::DEFAULT_TIMEOUT),
             "HttpConfig timeout reaches the transport"
         );
-        let posted: Params = recorded[0].form.iter().cloned().collect();
-        assert!(client.verify(&posted, form_value(&recorded[0], "sign").unwrap()));
+        assert!(client.verify(&recorded[0].form, recorded[0].form.get("sign").unwrap()));
     }
 
     #[tokio::test]
@@ -825,21 +807,13 @@ mod tests {
         );
         let recorded = transport.recorded();
         assert_eq!(recorded[0].method, "GET");
-        assert!(
-            recorded[0]
-                .url
-                .starts_with("https://pay.example.com/api.php?")
-        );
-        assert_eq!(query_value(&recorded[0], "act").as_deref(), Some("order"));
-        assert_eq!(
-            query_value(&recorded[0], "key").as_deref(),
-            Some("testkey123")
-        );
-        assert_eq!(query_value(&recorded[0], "pid").as_deref(), Some("1001"));
-        assert_eq!(
-            query_value(&recorded[0], "out_trade_no").as_deref(),
-            Some("ORDER001")
-        );
+        assert_eq!(recorded[0].url, "https://pay.example.com/api.php");
+        assert_eq!(recorded[0].query.get("act"), Some("order"));
+        assert_eq!(recorded[0].query.get("key"), Some("testkey123"));
+        assert_eq!(recorded[0].query.get("pid"), Some("1001"));
+        assert_eq!(recorded[0].query.get("out_trade_no"), Some("ORDER001"));
+        let debug = format!("{:?}", recorded[0]);
+        assert!(!debug.contains("testkey123"), "{debug}");
     }
 
     #[tokio::test]
@@ -913,16 +887,15 @@ mod tests {
 
         let recorded = transport.recorded();
         assert_eq!(recorded[0].method, "POST");
-        assert_eq!(
-            recorded[0].url,
-            "https://pay.example.com/api.php?act=refund"
-        );
-        assert_eq!(form_value(&recorded[0], "key"), Some("testkey123"));
-        assert_eq!(form_value(&recorded[0], "pid"), Some("1001"));
-        assert_eq!(form_value(&recorded[0], "money"), Some("10.00"));
-        assert_eq!(form_value(&recorded[0], "out_trade_no"), Some("ORDER001"));
-        assert_eq!(form_value(&recorded[0], "act"), None);
-        assert_eq!(form_value(&recorded[1], "trade_no"), Some("T1"));
+        assert_eq!(recorded[0].url, "https://pay.example.com/api.php");
+        assert_eq!(recorded[0].query.get("act"), Some("refund"));
+        assert_eq!(recorded[0].query.len(), 1, "only act travels in the query");
+        assert_eq!(recorded[0].form.get("key"), Some("testkey123"));
+        assert_eq!(recorded[0].form.get("pid"), Some("1001"));
+        assert_eq!(recorded[0].form.get("money"), Some("10.00"));
+        assert_eq!(recorded[0].form.get("out_trade_no"), Some("ORDER001"));
+        assert_eq!(recorded[0].form.get("act"), None);
+        assert_eq!(recorded[1].form.get("trade_no"), Some("T1"));
     }
 
     #[tokio::test]
@@ -959,13 +932,13 @@ mod tests {
         ));
 
         let recorded = transport.recorded();
-        assert_eq!(query_value(&recorded[0], "act").as_deref(), Some("orders"));
-        assert_eq!(query_value(&recorded[0], "limit").as_deref(), Some("50"));
-        assert_eq!(query_value(&recorded[0], "page").as_deref(), Some("3"));
-        assert_eq!(query_value(&recorded[0], "offset").as_deref(), Some("100"));
-        assert_eq!(query_value(&recorded[1], "limit").as_deref(), Some("1"));
-        assert_eq!(query_value(&recorded[1], "page").as_deref(), Some("1"));
-        assert_eq!(query_value(&recorded[1], "offset").as_deref(), Some("0"));
+        assert_eq!(recorded[0].query.get("act"), Some("orders"));
+        assert_eq!(recorded[0].query.get("limit"), Some("50"));
+        assert_eq!(recorded[0].query.get("page"), Some("3"));
+        assert_eq!(recorded[0].query.get("offset"), Some("100"));
+        assert_eq!(recorded[1].query.get("limit"), Some("1"));
+        assert_eq!(recorded[1].query.get("page"), Some("1"));
+        assert_eq!(recorded[1].query.get("offset"), Some("0"));
     }
 
     #[tokio::test]
@@ -999,10 +972,7 @@ mod tests {
         assert_eq!(transport.recorded().len(), 5);
         assert!(client.query_all_orders(2, 0).await.unwrap().is_empty());
         assert_eq!(transport.recorded().len(), 5, "max_pages = 0 sends nothing");
-        assert_eq!(
-            query_value(&transport.recorded()[4], "page").as_deref(),
-            Some("2")
-        );
+        assert_eq!(transport.recorded()[4].query.get("page"), Some("2"));
     }
 
     #[tokio::test]
@@ -1023,10 +993,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(
-            query_value(&transport.recorded()[0], "act").as_deref(),
-            Some("settle")
-        );
+        assert_eq!(transport.recorded()[0].query.get("act"), Some("settle"));
     }
 
     #[tokio::test]

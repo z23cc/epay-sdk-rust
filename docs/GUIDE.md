@@ -60,7 +60,7 @@ test-util feature → MockTransport、NotifyFixture
 | `reqwest-native-tls` | 否 | reqwest + native-tls |
 | `axum` | 否 | Axum 0.8 抽取器与路由助手 |
 | `blocking` | 否 | `blocking::Client`，面向脚本 / CLI / 对账任务 |
-| `tracing` | 否 | 每次网关调用一个 `tracing` span（`log` 仍然保留） |
+| `tracing` | 否 | 每次网关调用一个 `tracing` span，日志改走 `tracing`（不再发 `log`） |
 | `test-util` | 否 | `test_util`：`MockTransport`、`NotifyFixture` |
 
 ## 无 HTTP 的协议上下文
@@ -199,7 +199,7 @@ let merchant = client.query_merchant()?;
 
 ## 可观测性
 
-`debug(true)` 时通过 `log` 输出脱敏后的请求 / 响应。开启 `tracing` feature 后每次网关调用都在 `epay.request` span（字段 `endpoint`、`method`）内执行，重试以 `warn` 事件记录。
+`debug(true)` 时输出脱敏后的请求 / 响应。未开启 `tracing` feature 时走 `log`；开启后**只**走 `tracing`（不会同时发 `log`，因此安装了 `LogTracer` 的应用不会看到重复事件），每次网关调用都在 `epay.request` span（字段 `endpoint`、`method`）内执行，重试和回调拒绝以 `warn` 事件记录。
 
 ## 旧 HTTP 网关
 
@@ -234,11 +234,11 @@ assert!(epay_sdk::Money::from_yuan_str("9.999").is_err());
 let exact = epay_sdk::Money::from_yuan_str("9.90")?;
 let rounded = epay_sdk::Money::from_yuan_str_rounded("9.999")?;
 assert_eq!(rounded.to_string(), "10.00");
-assert_eq!(exact.to_fen(), 990);
+assert_eq!(exact.try_to_fen()?, 990);
 # Ok::<(), epay_sdk::Error>(())
 ```
 
-只有显式带 `_rounded` 的 API 才会四舍五入。`Money` 序列化为 `"9.90"` 字符串；反序列化只接受字符串和整数 JSON 数字，带小数的 JSON 数字会被拒绝（它到达时已经是 f64，无法证明精确）。
+只有显式带 `_rounded` 的 API 才会四舍五入。`try_to_fen()` 在超出 `i64` 范围时返回错误而不是饱和。核对回调金额请用 `NotifyData::money_matches(order.money)`，不要先把回调金额转成分再入账。`Money` 序列化为 `"9.90"` 字符串；反序列化只接受字符串和整数 JSON 数字，带小数的 JSON 数字会被拒绝（它到达时已经是 f64，无法证明精确）。
 
 ## 环境变量
 
@@ -318,7 +318,7 @@ let query = NotifyFixture::new(1001, "testkey123", "ORDER001", Money::from_yuan_
 # }
 ```
 
-网关接口用 `MockTransport` 脚本化响应：`Client::builder(..).transport(MockTransport::new().push_json(r#"{"code":1,...}"#))`。
+网关接口用 `MockTransport` 脚本化响应：`Client::builder(..).transport(MockTransport::new().push_json(r#"{"code":1,...}"#))`；`recorded()` 里的 `query` / `form` 是 `Params`，`Debug` 输出会脱敏 `key` / `sign`，用 `get()` 断言。
 
 ## 0.1 → 0.2 迁移
 

@@ -1,24 +1,33 @@
-//! Internal logging shims: every diagnostic goes to `log`, and additionally
-//! to `tracing` when the `tracing` feature is enabled.
+//! Internal logging shims: diagnostics go to `tracing` when that feature is
+//! enabled, otherwise to `log` — never both, so applications bridging `log`
+//! into `tracing` do not see duplicate events.
 
+#[cfg(feature = "tracing")]
 macro_rules! sdk_debug {
-    ($($arg:tt)*) => {{
-        log::debug!($($arg)*);
-        #[cfg(feature = "tracing")]
-        {
-            tracing::debug!($($arg)*);
-        }
-    }};
+    ($($arg:tt)*) => {
+        tracing::debug!($($arg)*)
+    };
 }
 
+#[cfg(not(feature = "tracing"))]
+macro_rules! sdk_debug {
+    ($($arg:tt)*) => {
+        log::debug!($($arg)*)
+    };
+}
+
+#[cfg(feature = "tracing")]
 macro_rules! sdk_warn {
-    ($($arg:tt)*) => {{
-        log::warn!($($arg)*);
-        #[cfg(feature = "tracing")]
-        {
-            tracing::warn!($($arg)*);
-        }
-    }};
+    ($($arg:tt)*) => {
+        tracing::warn!($($arg)*)
+    };
+}
+
+#[cfg(not(feature = "tracing"))]
+macro_rules! sdk_warn {
+    ($($arg:tt)*) => {
+        log::warn!($($arg)*)
+    };
 }
 
 /// Wrap a gateway call in a `tracing` span when the feature is enabled.

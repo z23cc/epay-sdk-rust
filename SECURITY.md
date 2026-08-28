@@ -43,6 +43,10 @@ some weaknesses are inherent and must be handled by the application:
 
 - Merchant key, signatures and callback query strings are masked in `Debug`
   output, logs and error messages produced by the SDK.
+- The merchant key is stored once (shared by `Config` and `Signer`) and
+  zeroized when the last handle is dropped. It is still copied transiently
+  into request parameter maps and the outgoing HTTP request; those buffers
+  are freed after the call but not wiped.
 - The reqwest client the SDK creates itself follows no redirects, bounds
   response bodies and reports errors without the request URL. A
   `reqwest::Client` supplied by the caller keeps its own redirect policy;

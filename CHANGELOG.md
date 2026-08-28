@@ -32,9 +32,11 @@ the unpublished 0.1 line.
 - Pagination helpers `OrderListResponse::has_more` / `next_page` and
   `Client::query_all_orders(limit, max_pages)`.
 - `Money` implements `Serialize`/`Deserialize` (wire string or integer
-  JSON number; fractional JSON numbers are rejected) and `Money::to_fen()`.
+  JSON number; fractional JSON numbers are rejected) and
+  `Money::try_to_fen()` (errors instead of saturating).
 - `blocking` feature: `blocking::Client` for non-async programs.
-- `tracing` feature: a span per gateway call plus retry/warn events.
+- `tracing` feature: a span per gateway call plus retry/warn events;
+  replaces `log` output instead of duplicating it.
 - Axum `VerifiedReturn` extractor and `NotifyParams` fallible extractor;
   `callback_route` (GET + POST in one call) and `payer_ip` helper;
   `PaymentRequest::client_ip_addr`.
@@ -75,6 +77,10 @@ the unpublished 0.1 line.
 ### Security
 - Merchant key, signatures and callback query strings are masked in `Debug`,
   logs and error text; `MerchantInfo` masks the echoed key in `Debug`.
+- The merchant key is held once, shared by `Config` and `Signer`, and
+  zeroized when the last handle is dropped.
+- `MockTransport::recorded()` stores query/form as `Params` (redacting
+  `Debug`) rather than a URL containing `key=`.
 - Notifications must carry `sign_type=MD5`, match the configured PID and
   have structurally valid order number, amount and status before they are
   handed to application code.

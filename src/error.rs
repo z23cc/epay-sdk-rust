@@ -285,6 +285,8 @@ impl Error {
     /// Amount carries meaningful precision beyond two decimal places.
     pub const INVALID_MONEY_PRECISION: Self =
         Self::Param("money must have at most two fractional decimal places");
+    /// Amount does not fit the `i64` fen range.
+    pub const MONEY_OUT_OF_RANGE: Self = Self::Param("money exceeds the i64 fen range");
     /// Exactly one of `trade_no` / `out_trade_no` must be given.
     pub const MISSING_TRADE_NO: Self =
         Self::Param("exactly one of trade_no or out_trade_no is required");

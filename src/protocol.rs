@@ -205,7 +205,7 @@ impl ProtocolContextBuilder {
     /// Validate and build the context.
     pub fn build(self) -> Result<ProtocolContext> {
         let config = Config::from_parts(self.parts)?;
-        let signer = Signer::new(config.key().to_owned())?;
+        let signer = Signer::from_key(config.merchant_key().clone())?;
         Ok(ProtocolContext {
             inner: Arc::new(ProtocolInner { config, signer }),
         })

@@ -6,6 +6,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::error::{Error, Result};
+use crate::secret::MerchantKey;
 
 /// Validated protocol configuration shared by [`crate::ProtocolContext`] and
 /// [`crate::Client`].
@@ -15,7 +16,7 @@ use crate::error::{Error, Result};
 #[derive(Clone)]
 pub struct Config {
     pid: u64,
-    key: String,
+    key: MerchantKey,
     api_base_url: Url,
     debug: bool,
     notify_url: Option<Url>,
@@ -41,7 +42,7 @@ impl fmt::Debug for Config {
 #[derive(Clone)]
 pub(crate) struct ConfigParts {
     pub pid: u64,
-    pub key: String,
+    pub key: MerchantKey,
     pub api_base_url: String,
     pub debug: bool,
     pub notify_url: Option<String>,
@@ -53,7 +54,7 @@ impl ConfigParts {
     pub(crate) fn new(pid: u64, key: impl Into<String>, api_base_url: impl Into<String>) -> Self {
         Self {
             pid,
-            key: key.into(),
+            key: MerchantKey::new(key.into()),
             api_base_url: api_base_url.into(),
             debug: false,
             notify_url: None,
@@ -155,6 +156,10 @@ impl Config {
     }
 
     pub(crate) fn key(&self) -> &str {
+        self.key.as_str()
+    }
+
+    pub(crate) fn merchant_key(&self) -> &MerchantKey {
         &self.key
     }
 

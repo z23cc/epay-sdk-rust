@@ -422,6 +422,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]

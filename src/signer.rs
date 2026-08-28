@@ -4,6 +4,7 @@ use md5::{Digest, Md5};
 
 use crate::error::{Error, Result};
 use crate::params::Params;
+use crate::secret::MerchantKey;
 
 /// Default `sign_type` for 彩虹易支付 V1.
 pub const SIGN_TYPE_MD5: &str = "MD5";
@@ -14,7 +15,7 @@ pub const SIGN_TYPE_MD5: &str = "MD5";
 /// values; sort keys; join unencoded `k=v` pairs; append the merchant key; MD5.
 #[derive(Clone)]
 pub struct Signer {
-    key: String,
+    key: MerchantKey,
 }
 
 impl std::fmt::Debug for Signer {
@@ -26,7 +27,10 @@ impl std::fmt::Debug for Signer {
 impl Signer {
     /// Bind a merchant key; empty keys are rejected.
     pub fn new(key: impl Into<String>) -> Result<Self> {
-        let key = key.into();
+        Self::from_key(MerchantKey::new(key.into()))
+    }
+
+    pub(crate) fn from_key(key: MerchantKey) -> Result<Self> {
         if key.is_empty() {
             return Err(Error::INVALID_KEY);
         }
@@ -38,7 +42,7 @@ impl Signer {
         let payload = params.sign_payload();
         let mut hasher = Md5::new();
         hasher.update(payload.as_bytes());
-        hasher.update(self.key.as_bytes());
+        hasher.update(self.key.as_str().as_bytes());
         hex_lower(&hasher.finalize())
     }
 

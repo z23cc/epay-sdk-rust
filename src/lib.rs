@@ -63,6 +63,7 @@ pub mod transport;
 pub mod types;
 
 mod integrations;
+mod secret;
 mod serde_util;
 mod validation;
 

@@ -84,13 +84,13 @@ impl Money {
     }
 
     /// Amount in fen (1/100 yuan), exact because `Money` carries at most two
-    /// decimals. Interoperates with integer-minor-unit systems; saturates at
-    /// `i64::MAX` for amounts beyond ~9.2e16 fen.
-    pub fn to_fen(self) -> i64 {
+    /// decimals. Fails with [`Error::MONEY_OUT_OF_RANGE`] instead of
+    /// saturating when the value does not fit an `i64`.
+    pub fn try_to_fen(self) -> Result<i64> {
         self.0
             .checked_mul(Decimal::from(100))
             .and_then(|fen| fen.to_i64())
-            .unwrap_or(i64::MAX)
+            .ok_or(Error::MONEY_OUT_OF_RANGE)
     }
 
     /// Wire representation with exactly two decimal places (`"9.90"`).
@@ -180,16 +180,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fen_round_trips_and_saturates() {
+    fn fen_round_trips_and_rejects_overflow() {
         let money = Money::from_yuan_str("9.90").unwrap();
-        assert_eq!(money.to_fen(), 990);
+        assert_eq!(money.try_to_fen().unwrap(), 990);
         assert_eq!(Money::from_fen(990).unwrap(), money);
-        assert_eq!(Money::from_fen(1).unwrap().to_fen(), 1);
-        assert_eq!(Money::new(Decimal::MAX).unwrap().to_fen(), i64::MAX);
-        assert_eq!(
-            Money::from_yuan_str("100000000000000000").unwrap().to_fen(),
-            i64::MAX
-        );
+        assert_eq!(Money::from_fen(1).unwrap().try_to_fen().unwrap(), 1);
+        for huge in [
+            Money::new(Decimal::MAX).unwrap(),
+            Money::from_yuan_str("100000000000000000").unwrap(),
+        ] {
+            assert!(matches!(
+                huge.try_to_fen(),
+                Err(Error::Param(m)) if m.contains("fen range")
+            ));
+        }
     }
 
     #[test]

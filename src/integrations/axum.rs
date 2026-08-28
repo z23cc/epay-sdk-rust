@@ -157,14 +157,14 @@ where
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         let protocol = ProtocolContext::from_ref(state);
         let params = read_notify_params(request).await.map_err(|error| {
-            log::warn!("[epay-sdk] notify input rejected: {error}");
+            sdk_warn!("[epay-sdk] notify input rejected: {error}");
             NotifyRejection(error)
         })?;
         protocol
             .verify_notify(&params)
             .map(VerifiedNotify)
             .map_err(|error| {
-                log::warn!("[epay-sdk] notify verification rejected: {error}");
+                sdk_warn!("[epay-sdk] notify verification rejected: {error}");
                 NotifyRejection(error)
             })
     }
